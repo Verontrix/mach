@@ -25,13 +25,13 @@
             .lazy = true,
         },
         .mach_objc = .{
-            .url = "https://pkg.hexops.org/pkg/hexops/mach-objc/2d38fb258d8c15f382c8789ee9b5d52db17e94e3.tar.gz",
-            .hash = "mach_objc-0.0.0-pF1e0p4LDgBoJKtFRfDSWyVFtfyDcy_7YUBiuY74JkMT",
+            .url = "https://pkg.hexops.org/pkg/hexops/mach-objc/dc9af8a6db39a9224df682dab124f03d376aba2c.tar.gz",
+            .hash = "mach_objc-0.0.0-pF1e0jsLDQBs9Hi4zrKt4VdmCNUJVijCNLtqU35-5MID",
             .lazy = true,
         },
         .xcode_frameworks = .{
-            .url = "https://pkg.hexops.org/pkg/hexops/xcode-frameworks/d9de76b40c979eb425aad0e365fe57b676b5d6f6.tar.gz",
-            .hash = "N-V-__8AADOnqgUlgd1Wb1ddIDiG1EHw03m7SlLXNpLWgejt",
+            .url = "https://pkg.hexops.org/pkg/hexops/xcode-frameworks/62f660e82e4eddb5007cb4cf06a6d3d31237f05e.tar.gz",
+            .hash = "N-V-__8AAMikhQnOIqoH0uy5aepJKs8Zy0VqznnW3n94VSZN",
             .lazy = true,
         },
         .directx_headers = .{

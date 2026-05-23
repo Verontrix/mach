@@ -245,7 +245,7 @@ const MACHView = objc.objc.DefineClass(struct {
         }
 
         /// Prevent AppKit's default key handling (e.g. Esc exiting fullscreen) from firing.
-        pub fn @"doCommandBySelector:"(_: *Self, _: objc.objc.SEL) void {}
+        pub fn @"doCommandBySelector:"(_: *Self, _: ?*objc.objc.Selector) void {}
 
         /// Pushes a `key_press` or `key_repeat` event, then forwards the event through
         /// `interpretKeyEvents:` so AppKit can turn it into an `insertText:` call where
