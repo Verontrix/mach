@@ -916,10 +916,85 @@ pub const Event = union(enum) {
     /// Sent when the mouse wheel is scrolled.
     mouse_scroll: MouseScroll,
 
-    /// Sent when a user performs a zoom gesture.
+    /// Zoom gesture began.
     ///
-    /// Only supported on macOS currently.
-    zoom_gesture: ZoomGesture,
+    /// Followed by zero or more `zoom_update` events and terminated by exactly one `zoom_end` or
+    /// `zoom_cancel` event.
+    ///
+    /// Supported on: macOS
+    zoom_begin: GestureBegin,
+
+    /// Zoom gesture progressed.
+    ///
+    /// Supported on: macOS
+    zoom_update: ZoomUpdate,
+
+    /// Zoom gesture completed.
+    ///
+    /// Supported on: macOS
+    zoom_end: GestureLifecycle,
+
+    /// Zoom gesture cancelled by the system, e.g. because a palm was recognized instead.
+    /// Apps should roll back any zoom state they accumulated during the gesture, rather
+    /// than committing it as they would on `zoom_end`.
+    ///
+    /// Supported on: macOS
+    zoom_cancel: GestureLifecycle,
+
+    /// Rotation gesture began.
+    ///
+    /// Followed by zero or more `rotate_update` events and terminated by exactly one `rotate_end`
+    /// or `rotate_cancel` event.
+    ///
+    /// Supported on: no platforms currently.
+    rotate_begin: GestureBegin,
+
+    /// Rotation gesture progressed.
+    ///
+    /// Supported on: no platforms currently.
+    rotate_update: RotateUpdate,
+
+    /// Rotation gesture completed normally.
+    ///
+    /// Supported on: no platforms currently.
+    rotate_end: GestureLifecycle,
+
+    /// Rotation gesture cancelled by the system, e.g. because a palm was recognized instead.
+    /// Apps should roll back any rotation state they accumulated during the gesture, rather
+    /// than committing it as they would on `rotate_end`.
+    ///
+    /// Supported on: no platforms currently.
+    rotate_cancel: GestureLifecycle,
+
+    /// Panning gesture began.
+    ///
+    /// Followed by zero or more `pan_update` events and terminated by exactly one `pan_end` or
+    /// `pan_cancel` event.
+    ///
+    /// Supported on: no platforms currently.
+    pan_begin: GestureBegin,
+
+    /// Pan gesture progressed.
+    ///
+    /// Supported on: no platforms currently.
+    pan_update: PanUpdate,
+
+    /// Pan gesture completed normally.
+    ///
+    /// Supported on: no platforms currently.
+    pan_end: GestureLifecycle,
+
+    /// Pan gesture cancelled by the system, e.g. because a palm was recognized instead.
+    /// Apps should roll back any panning state they accumulated during the gesture, rather
+    /// than committing it as they would on `pan_end`.
+    ///
+    /// Supported on: no platforms currently.
+    pan_cancel: GestureLifecycle,
+
+    /// A discrete swipe gesture (single fire on recognition.)
+    ///
+    /// Supported on: no platforms currently.
+    swipe_gesture: SwipeGesture,
 
     pub const Key = struct {
         window_id: mach.ObjectID,
@@ -1002,10 +1077,87 @@ pub const Event = union(enum) {
         window_id: mach.ObjectID,
     };
 
-    pub const ZoomGesture = struct {
+    /// A touch gesture lifecycle event.
+    pub const GestureLifecycle = struct {
         window_id: mach.ObjectID,
-        phase: GesturePhase,
-        zoom: f32,
+
+        /// When the underlying hardware / OS reported this gesture transition.
+        ///
+        /// Drawn from the host's monotonic clock so successive events are guaranteed to have
+        /// non-decreasing timestamps.
+        timestamp: std.Io.Timestamp = .zero,
+    };
+
+    /// A touch gesture 'begin' lifecycle event.
+    pub const GestureBegin = struct {
+        window_id: mach.ObjectID,
+
+        /// See `GestureLifecycle.timestamp`.
+        timestamp: std.Io.Timestamp = .zero,
+
+        /// The gesture's focal point: the centroid of the contacts the OS's recognizer attributes
+        /// to this gesture, in normalized window coordinates - for implementing 'zoom around the
+        /// cursor', 'rotate around the pinch center', etc. behavior.
+        ///
+        /// Normalized window-space focal point: `0` is the left/top edge, `1` is
+        /// the right/bottom edge (same convention as `Event.Finger.x` / `.y`).
+        ///
+        /// May lie outside `[0, 1]` if the recognizer's centroid falls outside
+        /// the window bounds (e.g. trackpad gesture that the OS attributes to
+        /// the focused window even though no physical contact is on it).
+        focal_x: f32,
+        focal_y: f32,
+    };
+
+    pub const ZoomUpdate = struct {
+        window_id: mach.ObjectID,
+
+        /// See `GestureLifecycle.timestamp`.
+        timestamp: std.Io.Timestamp = .zero,
+
+        /// Zoom scale change since the previous `zoom_update` (or `zoom_begin` for the first
+        /// update). `1.0` = no change; `> 1.0` = zoom in; `< 1.0` = zoom out.
+        ///
+        /// To accumulate: `final_zoom *= ev.zoom_delta;`
+        zoom_delta: f32,
+    };
+
+    pub const RotateUpdate = struct {
+        window_id: mach.ObjectID,
+
+        /// See `GestureLifecycle.timestamp`.
+        timestamp: std.Io.Timestamp = .zero,
+
+        /// Additive rotation change since the previous `rotate_update` (or `rotate_begin`) in
+        /// radians. Positive is clockwise on screen.
+        ///
+        /// To accumulate: `final_rotation += ev.rotation_delta;`
+        rotation_delta: f32,
+    };
+
+    pub const PanUpdate = struct {
+        window_id: mach.ObjectID,
+
+        /// See `GestureLifecycle.timestamp`.
+        timestamp: std.Io.Timestamp = .zero,
+
+        /// Additive translation since the previous `pan_update` (or `pan_begin`), normalized
+        /// against the window's bounds (same convention as `Event.Finger.dx` / `.dy`)
+        /// `dx = 1.0` means a full window width to the right; `dy` grows downward.
+        ///
+        /// To accumulate: `final_pos.x += ev.dx; final_pos.y += ev.dy`
+        dx: f32,
+        dy: f32,
+    };
+
+    pub const SwipeGesture = struct {
+        window_id: mach.ObjectID,
+
+        /// See `GestureLifecycle.timestamp`.
+        timestamp: std.Io.Timestamp = .zero,
+
+        /// Cardinal direction the swipe travelled in window space.
+        direction: SwipeDirection,
     };
 
     pub const FocusGained = struct {
@@ -1046,15 +1198,7 @@ pub const KeyMods = packed struct(u16) {
     _padding: u8 = 0,
 };
 
-pub const GesturePhase = enum {
-    none,
-    may_begin,
-    began,
-    changed,
-    stationary,
-    ended,
-    cancelled,
-};
+pub const SwipeDirection = enum { up, down, left, right };
 
 /// A keyboard button ID, a virtual 'scancode' (not mapping to actual USB or PS/2 scancodes).
 ///

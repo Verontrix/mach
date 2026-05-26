@@ -363,15 +363,45 @@ const MACHView = objc.objc.DefineClass(struct {
             } });
         }
 
-        /// Pushes a `zoom_gesture` event. e.g. fired on macOS using a trackpad pinch.
+        /// Pushes zoom events for macOS trackpad pinch, recognized by AppKit `magnifyWithEvent`.
         pub fn @"magnifyWithEvent:"(self: *Self, event: ?*objc.app_kit.Event) void {
             const n = state(self);
             const e = event.?;
-            n.core.pushEvent(.{ .zoom_gesture = .{
+
+            // TODO: bind NSEvent.timestamp instead of using this ts.
+            const ts: std.Io.Timestamp = std.Io.Clock.now(.awake, n.io);
+
+            const lifecycle: Core.Event.GestureLifecycle = .{
                 .window_id = n.window_id,
-                .zoom = @floatCast(e.magnification()),
-                .phase = machPhaseFromPhase(e.phase()),
-            } });
+                .timestamp = ts,
+            };
+            switch (e.phase()) {
+                objc.app_kit.EventPhaseBegan => {
+                    // locationInWindow is in AppKit window coordinates (origin bottom-left, y
+                    // grows up). Convert against the view's visible rect to the normalized
+                    // origin-top-left convention used by Event.Finger.
+                    const view_rect = objc.app_kit.View.visibleRect(@ptrCast(self));
+                    const p = e.locationInWindow();
+                    const inv_w: f32 = if (view_rect.size.width > 0) @floatCast(1.0 / view_rect.size.width) else 0;
+                    const inv_h: f32 = if (view_rect.size.height > 0) @floatCast(1.0 / view_rect.size.height) else 0;
+                    const fx: f32 = @as(f32, @floatCast(p.x)) * inv_w;
+                    const fy_appkit: f32 = @as(f32, @floatCast(p.y)) * inv_h;
+                    n.core.pushEvent(.{ .zoom_begin = .{
+                        .window_id = n.window_id,
+                        .timestamp = ts,
+                        .focal_x = fx,
+                        .focal_y = 1.0 - fy_appkit,
+                    } });
+                },
+                objc.app_kit.EventPhaseChanged => n.core.pushEvent(.{ .zoom_update = .{
+                    .window_id = n.window_id,
+                    .timestamp = ts,
+                    .zoom_delta = 1.0 + @as(f32, @floatCast(e.magnification())),
+                } }),
+                objc.app_kit.EventPhaseEnded => n.core.pushEvent(.{ .zoom_end = lifecycle }),
+                objc.app_kit.EventPhaseCancelled => n.core.pushEvent(.{ .zoom_cancel = lifecycle }),
+                else => {}, // .none / .mayBegin / .stationary are useless to us
+            }
         }
 
         /// Called by AppKit (via `interpretKeyEvents:` invoked from `keyDown:`) to deliver
@@ -1213,19 +1243,6 @@ fn ensureRenderLoop(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
     rl.* = .{ .core = core, .core_mod = core_mod, .io = io };
     try rl.start();
     global_render_loop = rl;
-}
-
-fn machPhaseFromPhase(phase: objc.app_kit.EventPhase) Core.GesturePhase {
-    return switch (phase) {
-        objc.app_kit.EventPhaseNone => .none,
-        objc.app_kit.EventPhaseMayBegin => .may_begin,
-        objc.app_kit.EventPhaseBegan => .began,
-        objc.app_kit.EventPhaseChanged => .changed,
-        objc.app_kit.EventPhaseStationary => .stationary,
-        objc.app_kit.EventPhaseEnded => .ended,
-        objc.app_kit.EventPhaseCancelled => .cancelled,
-        else => .none,
-    };
 }
 
 fn machModifierFromModifierFlag(modifier_flag: usize) KeyMods {
