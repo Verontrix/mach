@@ -521,7 +521,7 @@ fn buildExamples(
 
         if (target.result.os.tag == .ios) {
             example.install_step = &addIosBundle(b, exe, example.name).step;
-            example.run_step.dependOn(example.install_step);
+            example.run_step.dependOn(addIosSimRun(b, example.install_step, example.name));
         } else {
             const run_cmd = b.addRunArtifact(exe);
             if (b.args) |args| run_cmd.addArgs(args);
@@ -594,6 +594,141 @@ fn addIosBundle(
     install_plist.step.dependOn(&copy_exe.step);
     return install_plist;
 }
+
+/// Returns a build step that boots an iPhone simulator (if none is already booted), brings the
+/// Simulator.app to the foreground, then `simctl install`s the bundle produced by `bundle_step` and
+/// launches it with `--console-pty` so the app's stdout/stderr streams back to the terminal.
+///
+/// iOS simulator only runs on a macOS host; on any other host this returns a step that fails the
+/// build.
+fn addIosSimRun(
+    b: *std.Build,
+    bundle_step: *std.Build.Step,
+    name: []const u8,
+) *std.Build.Step {
+    if (b.graph.host.result.os.tag != .macos) {
+        const fail = b.addFail(b.fmt(
+            "iOS simulator requires a macOS host machine (host is {s})",
+            .{@tagName(b.graph.host.result.os.tag)},
+        ));
+        return &fail.step;
+    }
+
+    // TODO(ios): allow users to specify bundle ID
+    const bundle_id = b.fmt("org.hexops.{s}", .{name});
+    const app_path = b.getInstallPath(.prefix, b.fmt("{s}.app", .{name}));
+
+    const run = IosSimRun.create(b, app_path, bundle_id);
+    run.step.dependOn(bundle_step);
+    return &run.step;
+}
+
+/// Custom `std.Build.Step` that uses `xcrun simctl` to install + launch an iOS simulator app
+/// bundle. Replaces an earlier shell-script-based implementation.
+const IosSimRun = struct {
+    step: std.Build.Step,
+    app_path: []const u8,
+    bundle_id: []const u8,
+
+    fn create(b: *std.Build, app_path: []const u8, bundle_id: []const u8) *IosSimRun {
+        const self = b.allocator.create(IosSimRun) catch @panic("OOM");
+        self.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = b.fmt("ios-sim-run {s}", .{bundle_id}),
+                .owner = b,
+                .makeFn = make,
+            }),
+            .app_path = b.dupe(app_path),
+            .bundle_id = b.dupe(bundle_id),
+        };
+        return self;
+    }
+
+    fn make(step: *std.Build.Step, opts: std.Build.Step.MakeOptions) anyerror!void {
+        _ = opts;
+        const self: *IosSimRun = @fieldParentPtr("step", step);
+        const arena = step.owner.allocator;
+        const io = step.owner.graph.io;
+
+        // If no simulator is booted, find an available iPhone device and boot it.
+        const booted_list = try std.process.run(arena, io, .{
+            .argv = &.{ "xcrun", "simctl", "list", "devices", "booted" },
+        });
+        defer arena.free(booted_list.stdout);
+        defer arena.free(booted_list.stderr);
+
+        if (std.mem.indexOf(u8, booted_list.stdout, "Booted") == null) {
+            const available = try std.process.run(arena, io, .{
+                .argv = &.{ "xcrun", "simctl", "list", "devices", "available" },
+            });
+            defer arena.free(available.stdout);
+            defer arena.free(available.stderr);
+
+            const dev_id = parseFirstIPhoneUdid(available.stdout) orelse {
+                try step.result_error_msgs.append(arena, "no available iPhone simulator devices found");
+                return error.MakeFailed;
+            };
+
+            try expectSuccess(step, arena, io, &.{ "xcrun", "simctl", "boot", dev_id }, "simctl boot");
+        }
+
+        // Bring Simulator.app to the foreground (idempotent).
+        try expectSuccess(step, arena, io, &.{ "open", "-a", "Simulator" }, "open Simulator");
+
+        // Install the freshly-bundled .app.
+        try expectSuccess(step, arena, io, &.{ "xcrun", "simctl", "install", "booted", self.app_path }, "simctl install");
+
+        // Launch with --console-pty so app stdio streams back to this terminal. We use spawn + wait
+        // here (instead of `run`) to inherit stdio rather than capture it.
+        var launch = try std.process.spawn(io, .{
+            .argv = &.{ "xcrun", "simctl", "launch", "--console-pty", "booted", self.bundle_id },
+        });
+        const term = try launch.wait(io);
+        if (term != .exited or term.exited != 0) {
+            try step.result_error_msgs.append(arena, "simctl launch exited non-zero");
+            return error.MakeFailed;
+        }
+    }
+
+    /// Run a command via `std.process.run`, free its captured stdio, and fail the step
+    /// with `tag` in the error message if the child did not exit successfully.
+    fn expectSuccess(
+        step: *std.Build.Step,
+        arena: std.mem.Allocator,
+        io: std.Io,
+        argv: []const []const u8,
+        tag: []const u8,
+    ) !void {
+        const result = try std.process.run(arena, io, .{ .argv = argv });
+        defer arena.free(result.stdout);
+        defer arena.free(result.stderr);
+        if (result.term != .exited or result.term.exited != 0) {
+            const msg = std.fmt.allocPrint(arena, "{s} failed (term={any}): {s}", .{
+                tag,
+                result.term,
+                std.mem.trim(u8, result.stderr, " \t\r\n"),
+            }) catch "command failed";
+            try step.result_error_msgs.append(arena, msg);
+            return error.MakeFailed;
+        }
+    }
+
+    /// Find the first iPhone UDID (8-4-4-4-12 hex form) in `xcrun simctl list devices`
+    /// output. Returns a slice into `text`, so the caller must keep `text` alive.
+    fn parseFirstIPhoneUdid(text: []const u8) ?[]const u8 {
+        var iter = std.mem.splitScalar(u8, text, '\n');
+        while (iter.next()) |line| {
+            if (std.mem.indexOf(u8, line, "iPhone") == null) continue;
+            const open_paren = std.mem.indexOfScalar(u8, line, '(') orelse continue;
+            const close_paren = std.mem.indexOfScalarPos(u8, line, open_paren, ')') orelse continue;
+            const candidate = line[open_paren + 1 .. close_paren];
+            // UDIDs are formatted XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX (36 chars).
+            if (candidate.len == 36) return candidate;
+        }
+        return null;
+    }
+};
 
 fn buildEditor(
     b: *std.Build,
