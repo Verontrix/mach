@@ -14,14 +14,14 @@
     },
     .dependencies = .{
         .freetype = .{
-            .url = "https://pkg.hexops.org/pkg/hexops/freetype/c4188e125fd4e8c84d49b619f4f409fde52ff1d0.tar.gz",
-            .hash = "freetype-0.0.0-Oa073aKZdgBGGFCSwR0IWkb5oV2rgBGAHeTnXIejmo0k",
+            .url = "https://pkg.hexops.org/pkg/hexops/freetype/1d0f0f11162275d67d3db2cb4905ed5c659b8a41.tar.gz",
+            .hash = "freetype-0.0.0-Oa073aaddgBS9kbmOT8NQP-kfpHr3YJgIASnj5V9PsZX",
             .lazy = true,
         },
 
         .@"kb-text-shape" = .{
-            .url = "https://pkg.hexops.org/pkg/hexops/kb-text-shape/fdf638d3d0c0651d687b9251efecd5420e872604.tar.gz",
-            .hash = "kb_text_shape-0.1.0-ltexQoEwGgAZEIpNiIRn46rqrtMNmO8nOuf4mAyJdPbc",
+            .url = "https://pkg.hexops.org/pkg/hexops/kb-text-shape/3e43ed35ea82bcf9a51d20500884f9f265238c51.tar.gz",
+            .hash = "kb_text_shape-0.1.0-ltexQow0GgCWc-DFDVEuHBKjU08CSS5dGOUg91UUVZ75",
             .lazy = true,
         },
         .mach_objc = .{
@@ -81,13 +81,13 @@
             .lazy = true,
         },
         .opusfile = .{
-            .url = "https://pkg.hexops.org/pkg/hexops/opusfile/cc08065df55c6caa0cae132bed039f7152066d84.tar.gz",
-            .hash = "opusfile-0.0.0-cWXcaQzLBgBcvY-nFqAoXHoa089gkh1-pIPraohKZWks",
+            .url = "https://pkg.hexops.org/pkg/hexops/opusfile/e4276233c6d3982173d9331f7d070c124473880f.tar.gz",
+            .hash = "opusfile-0.0.0-cWXcaTDPBgCpMe85dQMu5IzC7-liZMHR4m6DKy9EmQg_",
             .lazy = true,
         },
         .opusenc = .{
-            .url = "https://pkg.hexops.org/pkg/hexops/opusenc/7ac71dec46e389cdf52c5a27f1f236354add512b.tar.gz",
-            .hash = "opusenc-0.0.0-X0lZjYv5AgCwRXp0UnRSTcUmYelT-aknQPvsgWVCMneT",
+            .url = "https://pkg.hexops.org/pkg/hexops/opusenc/2e88eeb99a1cdb84df584031c47bb9c3fcb01226.tar.gz",
+            .hash = "opusenc-0.0.0-X0lZja_9AgDl5pppfFckmWMvqXQ70pdE1PMuedPaI3su",
             .lazy = true,
         },
         .mach_example_assets = .{
