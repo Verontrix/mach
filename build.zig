@@ -519,14 +519,80 @@ fn buildExamples(
             }
         }
 
-        const run_cmd = b.addRunArtifact(exe);
-        if (b.args) |args| run_cmd.addArgs(args);
+        if (target.result.os.tag == .ios) {
+            example.install_step = &addIosBundle(b, exe, example.name).step;
+            example.run_step.dependOn(example.install_step);
+        } else {
+            const run_cmd = b.addRunArtifact(exe);
+            if (b.args) |args| run_cmd.addArgs(args);
 
-        const installArtifact = b.addInstallArtifact(exe, .{});
-        example.install_step = &installArtifact.step;
-        run_cmd.step.dependOn(&installArtifact.step);
-        example.run_step.dependOn(&run_cmd.step);
+            const installArtifact = b.addInstallArtifact(exe, .{});
+            example.install_step = &installArtifact.step;
+            run_cmd.step.dependOn(&installArtifact.step);
+            example.run_step.dependOn(&run_cmd.step);
+        }
     }
+}
+
+/// Wraps `exe` into an `<name>.app` bundle under the install prefix (so it ends up at
+/// `zig-out/<name>.app/`). Returns a step that finishes once both the executable and a
+/// minimal `Info.plist` have been installed.
+///
+/// The plist is generated inline. CFBundleExecutable / CFBundleName / CFBundleIdentifier are
+/// derived from `name`. This mirrors the bundling pattern in `ios_test/build.zig`.
+fn addIosBundle(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    name: []const u8,
+) *std.Build.Step.InstallFile {
+    const app_dir = b.fmt("{s}.app", .{name});
+
+    // Install the executable inside the bundle as `<name>.app/<name>`.
+    const copy_exe = b.addInstallFile(
+        exe.getEmittedBin(),
+        b.fmt("{s}/{s}", .{ app_dir, name }),
+    );
+
+    // Generate an Info.plist that points at the embedded executable and identifies the bundle.
+    const plist = b.addWriteFiles().add("Info.plist", b.fmt(
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+        \\ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        \\<plist version="1.0">
+        \\<dict>
+        \\    <key>CFBundleExecutable</key>
+        \\    <string>{s}</string>
+        \\    <key>CFBundleIdentifier</key>
+        \\    <string>org.hexops.{s}</string>
+        \\    <key>CFBundleName</key>
+        \\    <string>{s}</string>
+        \\    <key>CFBundleVersion</key>
+        \\    <string>1</string>
+        \\    <key>CFBundleShortVersionString</key>
+        \\    <string>1.0</string>
+        \\    <key>CFBundlePackageType</key>
+        \\    <string>APPL</string>
+        \\    <key>LSRequiresIPhoneOS</key>
+        \\    <true/>
+        \\    <key>UIRequiredDeviceCapabilities</key>
+        \\    <array><string>arm64</string></array>
+        \\    <key>UISupportedInterfaceOrientations</key>
+        \\    <array>
+        \\        <string>UIInterfaceOrientationPortrait</string>
+        \\    </array>
+        \\    <key>UILaunchStoryboardName</key>
+        \\    <string></string>
+        \\    <key>UIApplicationSceneManifest</key>
+        \\    <dict>
+        \\        <key>UIApplicationSupportsMultipleScenes</key>
+        \\        <false/>
+        \\    </dict>
+        \\</dict>
+        \\</plist>
+    , .{ name, name, name }));
+    const install_plist = b.addInstallFile(plist, b.fmt("{s}/Info.plist", .{app_dir}));
+    install_plist.step.dependOn(&copy_exe.step);
+    return install_plist;
 }
 
 fn buildEditor(
