@@ -294,10 +294,39 @@ pub const Platform = enum {
     }
 };
 
+/// Adds system framework / include / library paths from the bundled `xcode_frameworks` package,
+/// picking the right subtree based on `target` (macOS vs iOS device vs iOS simulator).
+fn addXCodeFrameworks(b: *std.Build, module: *std.Build.Module) void {
+    const target = module.resolved_target orelse @panic("module must have .target specified");
+    const optimize = module.optimize orelse @panic("module must have .optimize specified");
+
+    const dep = b.lazyDependency("xcode_frameworks", .{
+        .target = target,
+        .optimize = optimize,
+    }) orelse return;
+
+    const subdir: ?[]const u8 = switch (target.result.os.tag) {
+        .macos => null,
+        .ios => if (target.result.abi == .simulator) "iphonesimulator" else "iphoneos",
+        else => null,
+    };
+
+    if (subdir) |sd| {
+        module.addSystemFrameworkPath(dep.path(b.fmt("{s}/Frameworks", .{sd})));
+        module.addSystemIncludePath(dep.path(b.fmt("{s}/include", .{sd})));
+        module.addLibraryPath(dep.path(b.fmt("{s}/lib", .{sd})));
+    } else {
+        module.addSystemFrameworkPath(dep.path("Frameworks"));
+        module.addSystemIncludePath(dep.path("include"));
+        module.addLibraryPath(dep.path("lib"));
+    }
+}
+
 /// Links the system libraries, macOS frameworks, etc. that are needed to build sysgpu.
 fn linkSysgpu(b: *std.Build, module: *std.Build.Module) void {
     const target = module.resolved_target orelse @panic("module must have .target specified");
     const optimize = module.optimize orelse @panic("module must have .optimize specified");
+    _ = optimize;
 
     if (target.result.os.tag == .linux) {
         module.link_libc = true;
@@ -309,14 +338,7 @@ fn linkSysgpu(b: *std.Build, module: *std.Build.Module) void {
         module.linkFramework("Metal", .{});
         module.linkFramework("QuartzCore", .{});
 
-        if (b.lazyDependency("xcode_frameworks", .{
-            .target = target,
-            .optimize = optimize,
-        })) |dep| {
-            module.addSystemFrameworkPath(dep.path("Frameworks"));
-            module.addSystemIncludePath(dep.path("include"));
-            module.addLibraryPath(dep.path("lib"));
-        }
+        addXCodeFrameworks(b, module);
     } else if (target.result.os.tag == .windows) {
         module.link_libc = true;
         // TODO(build): Windows should never link OpenGL except in debug builds.
@@ -360,14 +382,7 @@ fn linkCore(b: *std.Build, module: *std.Build.Module) void {
         module.linkFramework("Metal", .{});
         module.linkFramework("QuartzCore", .{});
 
-        if (b.lazyDependency("xcode_frameworks", .{
-            .target = target,
-            .optimize = optimize,
-        })) |dep| {
-            module.addSystemFrameworkPath(dep.path("Frameworks"));
-            module.addSystemIncludePath(dep.path("include"));
-            module.addLibraryPath(dep.path("lib"));
-        }
+        addXCodeFrameworks(b, module);
         if (b.lazyDependency("mach_objc", .{
             .target = target,
             .optimize = optimize,
@@ -379,6 +394,7 @@ fn linkCore(b: *std.Build, module: *std.Build.Module) void {
 fn linkSysaudio(b: *std.Build, module: *std.Build.Module) void {
     const target = module.resolved_target orelse @panic("module must have .target specified");
     const optimize = module.optimize orelse @panic("module must have .optimize specified");
+    _ = optimize;
 
     if (target.result.os.tag == .linux) {
         module.link_libc = true;
@@ -392,14 +408,7 @@ fn linkSysaudio(b: *std.Build, module: *std.Build.Module) void {
         module.linkFramework("CoreFoundation", .{});
         module.linkFramework("CoreAudio", .{});
 
-        if (b.lazyDependency("xcode_frameworks", .{
-            .target = target,
-            .optimize = optimize,
-        })) |dep| {
-            module.addSystemFrameworkPath(dep.path("Frameworks"));
-            module.addSystemIncludePath(dep.path("include"));
-            module.addLibraryPath(dep.path("lib"));
-        }
+        addXCodeFrameworks(b, module);
     }
 }
 
