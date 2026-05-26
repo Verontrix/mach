@@ -1,3 +1,5 @@
+//! macOS backend for mach.Core
+
 const std = @import("std");
 const mach = @import("../main.zig");
 const Core = @import("../Core.zig");

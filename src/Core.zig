@@ -810,14 +810,14 @@ pub fn detectBackendType(allocator: std.mem.Allocator) !gpu.BackendType {
 
 const Platform = switch (builtin.target.os.tag) {
     .wasi => @panic("TODO: support mach.Core WASM platform"),
-    .ios => @panic("TODO: support mach.Core IOS platform"),
+    .ios => @import("core/iOS.zig"),
     .windows => @import("core/Windows.zig"),
     .linux => blk: {
         if (builtin.target.abi.isAndroid())
             @panic("TODO: support mach.Core Android platform");
         break :blk @import("core/Linux.zig");
     },
-    .macos => @import("core/Darwin.zig"),
+    .macos => @import("core/macOS.zig"),
     else => {},
 };
 

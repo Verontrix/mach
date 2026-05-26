@@ -212,6 +212,12 @@ pub fn build(b: *std.Build) !void {
                     .optimize = optimize,
                 }),
             });
+            if (target.result.os.tag == .ios) {
+                // TODO(ios): do not require stripping binaries
+                // Avoid pulling in std.debug.SelfInfo.MachO.findModule, which references
+                // __dyld_get_image_header_containing_address, unavailable on iOS.
+                lib.root_module.strip = true;
+            }
             var iter = module.import_table.iterator();
             while (iter.next()) |e| {
                 lib.root_module.addImport(e.key_ptr.*, e.value_ptr.*);
@@ -445,13 +451,28 @@ pub fn addExecutable(
     );
     entrypoint_mod.addImport("app", options.app);
 
-    return mach_builder.addExecutable(.{
+    const exe = mach_builder.addExecutable(.{
         .name = options.name,
         .root_module = entrypoint_mod,
 
         // Win32 manifest file for DPI-awareness configuration
         .win32_manifest = mach_builder.path("src/core/windows/win32.manifest"),
     });
+
+    if (options.target.result.os.tag == .ios) {
+        // TODO(ios): do not require stripping binaries
+        // Avoid pulling in std.debug.SelfInfo.MachO.findModule, which references
+        // __dyld_get_image_header_containing_address, unavailable on iOS.
+        exe.root_module.strip = true;
+
+        // Zig does not ship an iOS libc, and Zig does not auto-resolve an iOS sysroot
+        // for `link_libc = true` modules the way it does for macOS. As a result, we
+        // provide the iOS SDK ourselves to both the entrypoint and the user's app.
+        addXCodeFrameworks(mach_builder, entrypoint_mod);
+        addXCodeFrameworks(mach_builder, options.app);
+    }
+
+    return exe;
 }
 
 fn buildExamples(
@@ -464,6 +485,8 @@ fn buildExamples(
     for (examples) |*example| {
         const app_mod = b.addModule(example.name, .{
             .root_source_file = b.path(b.fmt("examples/{s}/App.zig", .{example.name})),
+            .target = target,
+            .optimize = optimize,
         });
         app_mod.addImport("mach", mach_mod);
         const exe = addExecutable(b, .{
