@@ -147,9 +147,6 @@ windows: mach.Objects(
         /// capture is released and setting it to true again would be a different request.
         mouse_capture: bool = false,
 
-        /// Target frames per second
-        refresh_rate: u32 = 0,
-
         /// Whether window decorations (titlebar, borders, etc.) should be shown.
         ///
         /// Has no effect on windows who DisplayMode is .fullscreen or .fullscreen_borderless

@@ -45,7 +45,6 @@ cursor_visible: bool,
 cursor_shape: CursorShape,
 border: bool,
 headless: bool,
-refresh_rate: u32,
 size: Size,
 surface_descriptor: gpu.Surface.Descriptor,
 

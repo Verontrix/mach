@@ -49,6 +49,7 @@ pub const Native = struct {
     net_wm_ping: c.Atom,
     net_wm_window_type: c.Atom,
     net_wm_window_type_dock: c.Atom,
+    refresh_rate: u32,
     root_window: c.Window,
     surface_descriptor: gpu.Surface.DescriptorFromXlibWindow,
     window: c.Window,
@@ -134,7 +135,9 @@ pub fn initWindow(
 
     const blank_pixmap = libx11.?.XCreatePixmap(display, x_window_id, 1, 1, 1);
     var color = c.XColor{};
-    core_window.refresh_rate = blk: {
+
+    // Query the display's current refresh rate for future frame-pacing / vsync work.
+    const refresh_rate: u32 = blk: {
         if (libxrr) |_libxrr| {
             const conf = _libxrr.XRRGetScreenInfo(display, root_window);
             break :blk @intCast(_libxrr.XRRConfigCurrentRate(conf));
@@ -160,6 +163,7 @@ pub fn initWindow(
         .net_wm_ping = libx11.?.XInternAtom(display, "NET_WM_PING", c.False),
         .net_wm_window_type = libx11.?.XInternAtom(display, "_NET_WM_WINDOW_TYPE", c.False),
         .net_wm_window_type_dock = libx11.?.XInternAtom(display, "_NET_WM_WINDOW_TYPE_DOCK", c.False),
+        .refresh_rate = refresh_rate,
         .root_window = root_window,
         .surface_descriptor = surface_descriptor,
         .window = x_window_id,
@@ -429,6 +433,7 @@ const LibXCursor = struct {
     }
 };
 
+// LibXRR dynamically loads libXrandr for querying display refresh rates and mode changes.
 const LibXRR = struct {
     handle: std.DynLib,
     XRRGetScreenInfo: *const fn (?*c.Display, c.Window) callconv(.c) ?*c.XRRScreenConfiguration,
