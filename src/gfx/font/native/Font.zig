@@ -15,6 +15,11 @@ var ft_library: ft.FT_Library = null;
 
 face: ft.FT_Face,
 font_bytes: []const u8,
+/// The font parsed once for the kb_text_shape shaper, reused across all shape() calls. Parsing is
+/// expensive (it builds the shaping data structures from the raw font tables).
+kb_font: kb.kbts_font,
+/// Cached units-per-em from kb_font, used to scale shaped advances/offsets.
+units_per_em: f32,
 bitmap: std.ArrayList(RGBA32) = .empty,
 
 pub fn initFreetype() !void {
@@ -32,23 +37,29 @@ pub fn initBytes(font_bytes: []const u8) anyerror!Font {
     var face: ft.FT_Face = null;
     if (ft.FT_New_Memory_Face(ft_library, font_bytes.ptr, @intCast(font_bytes.len), 0, &face) != 0)
         return error.FreetypeError;
-    return .{ .face = face, .font_bytes = font_bytes };
+
+    // Parse the font for the kb_text_shape shaper once and cache the result; shape() then reuses it
+    // via kbts_ShapePushFont rather than re-parsing the whole font on every call.
+    var kb_font = kb.kbts_FontFromMemory(@constCast(font_bytes.ptr), @intCast(font_bytes.len), 0, null, null);
+    if (kb.kbts_FontIsValid(&kb_font) == 0) return error.InvalidFont;
+
+    // Read units-per-em once; it is constant for the font and needed to scale shaped metrics.
+    var info: kb.kbts_font_info2_1 = std.mem.zeroes(kb.kbts_font_info2_1);
+    info.Base.Size = @sizeOf(kb.kbts_font_info2_1);
+    kb.kbts_GetFontInfo2(&kb_font, @ptrCast(&info));
+    if (info.UnitsPerEm == 0) return error.InvalidFont;
+
+    return .{
+        .face = face,
+        .font_bytes = font_bytes,
+        .kb_font = kb_font,
+        .units_per_em = @floatFromInt(info.UnitsPerEm),
+    };
 }
 
 pub fn shape(f: *Font, r: *TextRun) anyerror!void {
-    const kb_font = kb.kbts_ShapePushFontFromMemory(
-        r.context,
-        @constCast(f.font_bytes.ptr),
-        @intCast(f.font_bytes.len),
-        0,
-    ) orelse return error.RenderError;
-
-    // Get font metrics to know UnitsPerEm for scaling.
-    var info: kb.kbts_font_info2_1 = std.mem.zeroes(kb.kbts_font_info2_1);
-    info.Base.Size = @sizeOf(kb.kbts_font_info2_1);
-    kb.kbts_GetFontInfo2(kb_font, @ptrCast(&info));
-    if (info.UnitsPerEm == 0) return error.InvalidFont;
-    r.units_per_em = @floatFromInt(info.UnitsPerEm);
+    if (kb.kbts_ShapePushFont(r.context, &f.kb_font) == null) return error.RenderError;
+    r.units_per_em = f.units_per_em;
 
     // Set FreeType face size for glyph rendering (still needed for rasterization).
     const font_size_pt = r.font_size_px / px_per_pt;
@@ -131,6 +142,7 @@ pub fn render(f: *Font, allocator: std.mem.Allocator, glyph_index: u32, opt: Ren
 }
 
 pub fn deinit(f: *Font, allocator: std.mem.Allocator) void {
+    kb.kbts_FreeFont(&f.kb_font);
     _ = ft.FT_Done_Face(f.face);
     f.bitmap.deinit(allocator);
 }
