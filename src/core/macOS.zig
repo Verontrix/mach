@@ -38,6 +38,7 @@ const MACHAppDelegate = objc.objc.DefineClass(struct {
         }
 
         pub fn @"applicationShouldTerminate:"(_: *Self, _: ?*objc.app_kit.Application) usize {
+            if (active_core) |core| core.exit();
             return 0; // NSTerminateCancel
         }
 
@@ -1110,6 +1111,7 @@ extern "CoreGraphics" fn CGWarpMouseCursorPosition(point: objc.core_graphics.Poi
 // subsequent ticks come from `wakeMainThread` via `dispatch_async_f`.
 var main_tick_ctx: ?*anyopaque = null;
 var main_tick_fn: ?*const fn (?*anyopaque) callconv(.c) void = null;
+var active_core: ?*Core = null;
 
 // When true, a main tick is already enqueued on the main dispatch queue and additional wakes are
 // deduplicated. Required because `dispatch_async_f` (unlike e.g. `std.Io.Event.set`) does NOT
@@ -1155,6 +1157,7 @@ pub fn run(comptime on_each_update_fn: anytype, args_tuple: std.meta.ArgsTuple(@
             }
         }
     };
+    active_core = args_tuple[0];
     main_tick_ctx = &args;
     main_tick_fn = &Helper.tick;
 
@@ -1163,9 +1166,40 @@ pub fn run(comptime on_each_update_fn: anytype, args_tuple: std.meta.ArgsTuple(@
 
     const delegate = MACHAppDelegate.allocInit();
     ns_app.setDelegate(@ptrCast(delegate));
+    createMenuBar(ns_app);
 
     ns_app.run();
     unreachable;
+}
+
+/// Creates the standard macOS application menu so Command+Q requests application shutdown.
+fn createMenuBar(ns_app: *objc.app_kit.Application) void {
+    const String = objc.foundation.String;
+    const empty = String.stringWithUTF8String("");
+
+    const bar = objc.app_kit.Menu.allocInit();
+    defer bar.release();
+    ns_app.setMainMenu(bar);
+
+    const app_menu_item = bar.addItemWithTitle_action_keyEquivalent(
+        empty,
+        null,
+        empty,
+    );
+
+    // The generated binding returns the NSMenuItem protocol view. Cast to the class interface to
+    // configure its submenu.
+    const app_menu_item_interface: *objc.app_kit.MenuItemInterface = @ptrCast(app_menu_item);
+
+    const app_menu = objc.app_kit.Menu.allocInit();
+    defer app_menu.release();
+    app_menu_item_interface.setSubmenu(app_menu);
+
+    _ = app_menu.addItemWithTitle_action_keyEquivalent(
+        String.stringWithUTF8String("Quit"),
+        objc.objc.Selector.named("terminate:"),
+        String.stringWithUTF8String("q"),
+    );
 }
 
 /// Called by Core.tick on the main thread each application tick. Creates new windows, applies
