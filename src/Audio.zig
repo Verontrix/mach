@@ -20,13 +20,16 @@ pub const alignment = simd_vector_length * @sizeOf(f32);
 
 const log = std.log.scoped(mach_module);
 
-// The number of milliseconds worth of audio to render ahead of time. The lower this number is, the
-// less latency there is in playing new audio. The higher this number is, the less chance there is
-// of glitchy audio playback.
-//
-// By default, we use three times 1/60th of a second - i.e. 3 frames could drop before audio would
-// stop playing smoothly assuming a 60hz application render rate.
-ms_render_ahead: f32 = 16,
+/// The number of microseconds worth of audio to render ahead of time. The lower this number is, the
+/// less latency there is in playing new audio. The higher this number is, the less chance there is
+/// of glitchy audio playback.
+///
+/// By default, this is `16 * 1000` (i.e. 16ms)
+///
+/// Underlying audio drivers themselves may have a further ring buffer size used to copy samples to
+/// the underlying hardware.
+/// TODO(Audio): expose configurable driver audio buffer sizes
+us_render_ahead: f32 = 16 * 1000, // 16ms
 
 buffers: mach.Objects(
     .{},
@@ -244,8 +247,8 @@ pub fn tick(audio: *Audio, audio_mod: mach.Mod(Audio)) !void {
     const driver_needs = audio.driver_needs_num_samples;
 
     // How many audio samples we will render ahead by
-    const samples_per_ms = @as(f32, @floatFromInt(player.sampleRate())) / 1000.0;
-    const render_ahead: u32 = @as(u32, @intFromFloat(@trunc(audio.ms_render_ahead * samples_per_ms))) * player_channels;
+    const samples_per_us = @as(f32, @floatFromInt(player.sampleRate())) / 1_000_000.0;
+    const render_ahead: u32 = @as(u32, @intFromFloat(@trunc(audio.us_render_ahead * samples_per_us))) * player_channels;
 
     // Our goal is to satisfy the driver's immediate needs, plus prepare render_head number of samples.
     const goal_pre_rendered = driver_needs + render_ahead;
