@@ -230,12 +230,8 @@ pub const State = enum(u8) {
     exited,
 };
 
-pub fn init(core: *Core, io: std.Io) !void {
-    // TODO(allocator)
-    const allocator = std.heap.c_allocator;
-
-    // TODO: fix all leaks and use options.allocator
-    // TODO(leak)
+pub fn init(core: *Core, allocator: std.mem.Allocator, io: std.Io) !void {
+    // TODO(leak): fix all leaks
     try mach.sysgpu.Impl.init(allocator, .{});
 
     core.* = .{

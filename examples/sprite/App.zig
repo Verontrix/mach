@@ -59,6 +59,7 @@ pub fn init(
     app: *App,
     app_mod: mach.Mod(App),
     core_mod: mach.Mod(mach.Core),
+    allocator: std.mem.Allocator,
     io: std.Io,
 ) !void {
     // You should use mach.Timer in general, but here we call std.Io.Timestamp.now() to show that
@@ -73,9 +74,6 @@ pub fn init(
         .title = "gfx.Sprite",
         .on_render = app_mod.id.render,
     });
-
-    // TODO(allocator): find a better way to get an allocator here
-    const allocator = std.heap.c_allocator;
 
     app.* = .{
         .allocator = allocator,

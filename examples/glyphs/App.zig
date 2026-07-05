@@ -84,6 +84,7 @@ pub fn init(
     core: *mach.Core,
     app_mod: mach.Mod(App),
     core_mod: mach.Mod(mach.Core),
+    allocator: std.mem.Allocator,
     io: std.Io,
 ) !void {
     core.on_exit = app_mod.id.deinit;
@@ -92,9 +93,6 @@ pub fn init(
         .title = "glyphs",
         .on_render = app_mod.id.render,
     });
-
-    // TODO(allocator): find a better way to get an allocator here
-    const allocator = std.heap.c_allocator;
 
     app.* = .{
         .app_thread = try mach.startThread(core, app_mod.id.tick, core_mod, .app),

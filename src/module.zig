@@ -942,6 +942,7 @@ pub fn Modules(module_lists: anytype) type {
 
         mods: ModulesByName(modules),
         io: std.Io,
+        allocator: std.mem.Allocator,
 
         module_names: StringTable = .{},
         object_names: StringTable = .{},
@@ -956,6 +957,7 @@ pub fn Modules(module_lists: anytype) type {
                 .mods = undefined,
                 .graph = undefined,
                 .io = io,
+                .allocator = allocator,
             };
             try initGraph(&m.graph, allocator, io, .global);
 
@@ -1020,6 +1022,16 @@ pub fn Modules(module_lists: anytype) type {
 
                 pub const mod_name: ModuleName = module_name;
 
+                /// The allocator injected into module functions with a std.mem.Allocator parameter.
+                pub fn allocator(m: *const @This()) std.mem.Allocator {
+                    return m.modules.allocator;
+                }
+
+                /// The Io injected into module functions with a std.Io parameter.
+                pub fn io(m: *const @This()) std.Io {
+                    return m.modules.io;
+                }
+
                 pub fn getFunction(fn_name: ModuleFunctionName(module)) FunctionID {
                     return .{
                         .module_id = @intFromEnum(mod_name),
@@ -1068,6 +1080,10 @@ pub fn Modules(module_lists: anytype) type {
                         }
                         if (arg.type == std.Io) {
                             @field(args, arg.name) = m.modules.io;
+                            continue :outer;
+                        }
+                        if (arg.type == std.mem.Allocator) {
+                            @field(args, arg.name) = m.modules.allocator;
                             continue :outer;
                         }
                         if (@typeInfo(arg.type) == .@"struct" and @hasDecl(arg.type, "IsMachMod")) {

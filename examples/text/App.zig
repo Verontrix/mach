@@ -91,6 +91,7 @@ fn setupPipeline(
     app: *App,
     text: *gfx.Text,
     core: *mach.Core,
+    allocator: std.mem.Allocator,
 ) !void {
     // Create a text rendering pipeline
     app.pipeline_id = try text.pipelines.new(.{
@@ -115,7 +116,7 @@ fn setupPipeline(
     });
     // Register the text object with our text rendering pipeline.
     var texts = text.pipelines.get(app.pipeline_id.?, .render_list);
-    try texts.append(std.heap.c_allocator, app.player_id);
+    try texts.append(allocator, app.player_id);
     text.pipelines.set(app.pipeline_id.?, .render_list, texts);
 }
 
@@ -131,6 +132,7 @@ pub fn appTick(
     core: *mach.Core,
     app: *App,
     text: *gfx.Text,
+    allocator: std.mem.Allocator,
 ) !void {
     const label = @tagName(mach_module) ++ ".tick";
     _ = label;
@@ -186,7 +188,7 @@ pub fn appTick(
             );
             // Register the text object with our text rendering pipeline.
             var texts = text.pipelines.get(pipeline_id, .render_list);
-            try texts.append(std.heap.c_allocator, new_text_id);
+            try texts.append(allocator, new_text_id);
             text.pipelines.set(pipeline_id, .render_list, texts);
         }
     }
@@ -224,9 +226,10 @@ pub fn render(
     app: *App,
     text: *gfx.Text,
     text_mod: mach.Mod(gfx.Text),
+    allocator: std.mem.Allocator,
 ) !void {
     if (app.pipeline_id == null) {
-        try setupPipeline(app, text, core);
+        try setupPipeline(app, text, core, allocator);
         return;
     }
 
