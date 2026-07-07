@@ -18,6 +18,17 @@ pub const SwapChain = opaque {
         max_buffered_frames: u32 = 2,
     };
 
+    /// Returns a backend-specific handle for the currently-acquired frame, or null if no frame
+    /// is acquired or the backend does not expose one.
+    ///
+    /// On Metal this is the `CAMetalDrawable` (castable to `id<CAMetalDrawable>`). The handle is
+    /// borrowed: it is valid from a successful `getCurrentTextureView()` until the next
+    /// `getCurrentTextureView()` call; retain it if you need it longer. Do not present it
+    /// yourself; `present()` remains responsible for presentation.
+    pub inline fn getCurrentNativeHandle(swap_chain: *SwapChain) ?*anyopaque {
+        return Impl.swapChainGetCurrentNativeHandle(swap_chain);
+    }
+
     pub inline fn getCurrentTexture(swap_chain: *SwapChain) ?*Texture {
         return Impl.swapChainGetCurrentTexture(swap_chain);
     }

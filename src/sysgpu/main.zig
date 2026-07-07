@@ -1250,6 +1250,11 @@ pub const Impl = sysgpu.Interface(struct {
         @panic("unimplemented");
     }
 
+    pub inline fn swapChainGetCurrentNativeHandle(swap_chain_raw: *sysgpu.SwapChain) ?*anyopaque {
+        const swap_chain: *impl.SwapChain = @ptrCast(@alignCast(swap_chain_raw));
+        return swap_chain.getCurrentNativeHandle();
+    }
+
     pub inline fn swapChainGetCurrentTexture(swap_chain: *sysgpu.SwapChain) ?*sysgpu.Texture {
         _ = swap_chain;
         @panic("unimplemented");

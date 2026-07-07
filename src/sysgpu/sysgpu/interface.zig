@@ -270,6 +270,7 @@ pub fn Interface(comptime T: type) type {
     assertDecl(T, "surfaceRelease", fn (surface: *sysgpu.Surface) callconv(.@"inline") void);
 
     // sysgpu.SwapChain
+    assertDecl(T, "swapChainGetCurrentNativeHandle", fn (swap_chain: *sysgpu.SwapChain) callconv(.@"inline") ?*anyopaque);
     assertDecl(T, "swapChainGetCurrentTexture", fn (swap_chain: *sysgpu.SwapChain) callconv(.@"inline") ?*sysgpu.Texture);
     assertDecl(T, "swapChainGetCurrentTextureView", fn (swap_chain: *sysgpu.SwapChain) callconv(.@"inline") ?*sysgpu.TextureView);
     assertDecl(T, "swapChainPresent", fn (swap_chain: *sysgpu.SwapChain) callconv(.@"inline") void);
@@ -1269,6 +1270,11 @@ pub fn Export(comptime T: type) type {
         // SYSGPU_EXPORT void sysgpuSurfaceRelease(WGPUSurface surface);
         export fn sysgpuSurfaceRelease(surface: *sysgpu.Surface) void {
             T.surfaceRelease(surface);
+        }
+
+        // SYSGPU_EXPORT void * sysgpuSwapChainGetCurrentNativeHandle(WGPUSwapChain swapChain);
+        export fn sysgpuSwapChainGetCurrentNativeHandle(swap_chain: *sysgpu.SwapChain) ?*anyopaque {
+            return T.swapChainGetCurrentNativeHandle(swap_chain);
         }
 
         // SYSGPU_EXPORT WGPUTexture sysgpuSwapChainGetCurrentTexture(WGPUSwapChain swapChain);
@@ -2578,6 +2584,11 @@ pub const StubInterface = Interface(struct {
 
     pub inline fn surfaceRelease(surface: *sysgpu.Surface) void {
         _ = surface;
+        unreachable;
+    }
+
+    pub inline fn swapChainGetCurrentNativeHandle(swap_chain: *sysgpu.SwapChain) ?*anyopaque {
+        _ = swap_chain;
         unreachable;
     }
 

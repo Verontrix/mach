@@ -513,6 +513,12 @@ pub const SwapChain = struct {
         }
     }
 
+    /// Returns the currently-acquired `CAMetalDrawable`, or null if no frame is acquired.
+    /// Borrowed: valid until the next getCurrentTextureView() call, which releases it.
+    pub fn getCurrentNativeHandle(swapchain: *SwapChain) ?*anyopaque {
+        return @ptrCast(swapchain.current_drawable);
+    }
+
     pub fn present(swapchain: *SwapChain) !void {
         const pool = objc.autoreleasePoolPush();
         defer objc.autoreleasePoolPop(pool);

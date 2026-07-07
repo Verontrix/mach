@@ -713,6 +713,12 @@ pub const SwapChain = struct {
         return swapchain.views[index];
     }
 
+    /// Native frame handles are not exposed on this backend yet.
+    pub fn getCurrentNativeHandle(swapchain: *SwapChain) ?*anyopaque {
+        _ = swapchain;
+        return null;
+    }
+
     pub fn present(swapchain: *SwapChain) !void {
         const device = swapchain.device;
         if (builtin.target.os.tag == .windows) {

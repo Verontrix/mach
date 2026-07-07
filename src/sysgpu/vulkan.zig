@@ -1167,6 +1167,12 @@ pub const SwapChain = struct {
         return view;
     }
 
+    /// Native frame handles are not exposed on this backend yet.
+    pub fn getCurrentNativeHandle(sc: *SwapChain) ?*anyopaque {
+        _ = sc;
+        return null;
+    }
+
     pub fn present(sc: *SwapChain) !void {
         if (sc.current_texture_view == null) return;
 
