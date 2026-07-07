@@ -1249,6 +1249,7 @@ fn ModulesByName(comptime modules: anytype) type {
 test "Long field name" {
     const test_module = struct {
         pub const mach_module = .test_module;
+        pub const mach_systems = .{};
         really_really_really_really_really_really_really_long_field_name: Objects(.{}, struct {}),
         another_field: Objects(.{}, struct {}),
     };
@@ -1258,11 +1259,7 @@ test "Long field name" {
     const allocator = aa.allocator();
 
     const io = std.Options.debug_io;
-    var modules = Modules(.{test_module}){
-        .mods = undefined,
-        .graph = undefined,
-        .io = io,
-    };
+    var modules: Modules(.{test_module}) = undefined;
     try modules.init(allocator, io);
     modules.deinit(allocator);
     aa.deinit();
@@ -1271,6 +1268,7 @@ test "Long field name" {
 test "Many fields, same module" {
     const test_module = struct {
         pub const mach_module = .test_module;
+        pub const mach_systems = .{};
         field0: Objects(.{}, struct {}),
         field1: Objects(.{}, struct {}),
         field2: Objects(.{}, struct {}),
@@ -1288,11 +1286,7 @@ test "Many fields, same module" {
     const allocator = aa.allocator();
 
     const io = std.Options.debug_io;
-    var modules = Modules(.{test_module}){
-        .mods = undefined,
-        .graph = undefined,
-        .io = io,
-    };
+    var modules: Modules(.{test_module}) = undefined;
     try modules.init(allocator, io);
     modules.deinit(allocator);
     aa.deinit();
@@ -1301,6 +1295,7 @@ test "Many fields, same module" {
 test "Many fields, Many modules" {
     const test_module0 = struct {
         pub const mach_module = .test_module0;
+        pub const mach_systems = .{};
         field0: Objects(.{}, struct {}),
         field1: Objects(.{}, struct {}),
         field2: Objects(.{}, struct {}),
@@ -1308,6 +1303,7 @@ test "Many fields, Many modules" {
     };
     const test_module1 = struct {
         pub const mach_module = .test_module1;
+        pub const mach_systems = .{};
         field4: Objects(.{}, struct {}),
         field5: Objects(.{}, struct {}),
         field6: Objects(.{}, struct {}),
@@ -1315,6 +1311,7 @@ test "Many fields, Many modules" {
     };
     const test_module2 = struct {
         pub const mach_module = .test_module2;
+        pub const mach_systems = .{};
         field8: Objects(.{}, struct {}),
         field9: Objects(.{}, struct {}),
     };
@@ -1324,11 +1321,7 @@ test "Many fields, Many modules" {
     const allocator = aa.allocator();
 
     const io = std.Options.debug_io;
-    var modules = Modules(.{ test_module0, test_module1, test_module2 }){
-        .mods = undefined,
-        .graph = undefined,
-        .io = io,
-    };
+    var modules: Modules(.{ test_module0, test_module1, test_module2 }) = undefined;
     try modules.init(allocator, io);
     modules.deinit(allocator);
     aa.deinit();
