@@ -1053,7 +1053,6 @@ pub fn Modules(module_lists: anytype) type {
                     if (@typeInfo(F) == .@"struct" and @typeInfo(F).@"struct".is_tuple) {
                         // Run a list of functions instead of a single function
                         // TODO: verify this is a mach.schedule() decl
-                        if (module_name != .app) @compileLog(module_name);
                         inline for (f) |schedule_entry| {
                             // TODO: unify with Modules(modules).get(M)
                             const callMod: Module(schedule_entry.@"0") = .{ .mods = m.mods, .modules = m.modules };
