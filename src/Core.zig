@@ -379,7 +379,7 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
 
             // Run on_render for the window with the windows lock released so user code may take it.
             core.windows.unlockShared();
-            core_mod.run(on_render);
+            core_mod.callId(on_render);
             core.windows.lockShared();
 
             // Ensure nobody reads the window outside on_render.
@@ -520,7 +520,7 @@ fn platform_update_callback(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !
 
 fn handleExit(core: *Core, core_mod: mach.Mod(Core)) !void {
     if (core.state.load(.acquire) == .exiting) {
-        if (core.on_exit) |on_exit| core_mod.run(on_exit);
+        if (core.on_exit) |on_exit| core_mod.callId(on_exit);
         core_mod.call(.deinit);
     }
 }

@@ -299,7 +299,7 @@ pub fn tick(audio: *Audio, audio_mod: mach.Mod(Audio)) !void {
             } else buffer.index = new_index;
         }
     }
-    if (did_state_change) if (audio.on_state_change) |f| audio_mod.run(f);
+    if (did_state_change) if (audio.on_state_change) |f| audio_mod.callId(f);
 
     // Write our rendered samples to the fifo, expanding its size as needed and converting our f32
     // samples to the format the driver expects.

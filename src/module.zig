@@ -30,7 +30,7 @@ pub fn startThread(
 
 fn runThread(core: *Core, on_tick: FunctionID, core_mod: Mod(Core)) void {
     while (core.state.load(.acquire) == .running) {
-        core_mod.run(on_tick);
+        core_mod.callId(on_tick);
     }
 }
 
@@ -830,17 +830,101 @@ pub fn Mod(comptime M: type) type {
 
         id: ModFunctionIDs(M),
         _ctx: *anyopaque,
-        _run: *const fn (ctx: *anyopaque, fn_id: FunctionID) void,
+        _io: std.Io,
+        _call: *const fn (ctx: *anyopaque, fn_id: FunctionID) void,
 
-        pub fn run(r: *const @This(), fn_id: FunctionID) void {
-            r._run(r._ctx, fn_id);
+        /// Calls the module's named function, e.g. `foo_mod.call(.bar)` where `.bar` is declared in
+        /// the module's `pub const mach_systems`
+        ///
+        /// `.bar` must be comptime known.
+        pub fn call(r: *const @This(), comptime f: ModuleFunctionName(M)) void {
+            r.callId(@field(r.id, @tagName(f)));
         }
 
-        pub fn call(r: *const @This(), comptime f: ModuleFunctionName(M)) void {
-            const fn_id = @field(r.id, @tagName(f));
-            r.run(fn_id);
+        /// Calls a module's named function, e.g. `foo_mod.call(bar_mod.id.bar)` where the ID comes
+        /// from any registered module.
+        ///
+        /// This is the dynamic runtime version of call().
+        pub fn callId(r: *const @This(), fn_id: FunctionID) void {
+            r._call(r._ctx, fn_id);
+        }
+
+        /// Calls the module's named function using std.Io.async
+        ///
+        /// The return value of the function is not guaranteed to be available until `std.Io.await`
+        /// is called.
+        ///
+        /// The function *may* be called immediately, before `async` returns. This has weaker
+        /// guarantees than `concurrent`, making more portable and reusable.
+        ///
+        /// When this function returns, it is guaranteed that `function` has already been called and
+        /// completed, or it has successfully been assigned a unit of concurrency.
+        ///
+        /// Refer to std.Io documentation for more details.
+        pub fn async(r: *const @This(), comptime f: ModuleFunctionName(M)) std.Io.Future(void) {
+            return r.asyncId(@field(r.id, @tagName(f)));
+        }
+
+        /// Equivalent to async() except it calls any module's runtime-known function ID instead of
+        /// a comptime-known name.
+        pub fn asyncId(r: *const @This(), fn_id: FunctionID) std.Io.Future(void) {
+            return r._io.async(callErased, .{ r._call, r._ctx, fn_id });
+        }
+
+        /// Calls the module's named function using std.Io.concurrent
+        ///
+        /// The return value of the function is not guaranteed to be available until `await` is
+        /// called, allowing the caller to progress while waiting for any `std.Io` operations.
+        ///
+        /// This has stronger guarantee than `async`, placing restrictions on what kind of `std.Io`
+        /// implementations are supported. By calling `async` instead, one allows, for example,
+        /// stackful single-threaded blocking I/O.
+        ///
+        /// Refer to std.Io documentation for more details.
+        pub fn concurrent(r: *const @This(), comptime f: ModuleFunctionName(M)) std.Io.ConcurrentError!std.Io.Future(void) {
+            return r.concurrentId(@field(r.id, @tagName(f)));
+        }
+
+        /// Equivalent to concurrent() except it calls any module's runtime-known function ID
+        /// instead of a comptime-known name.
+        pub fn concurrentId(r: *const @This(), fn_id: FunctionID) std.Io.ConcurrentError!std.Io.Future(void) {
+            return r._io.concurrent(callErased, .{ r._call, r._ctx, fn_id });
+        }
+
+        /// Equivalent to `async`, except the task is spawned in the given `group` instead of
+        /// becoming associated with a `Future`.
+        pub fn asyncGroup(r: *const @This(), group: *std.Io.Group, comptime f: ModuleFunctionName(M)) void {
+            r.asyncGroupId(group, @field(r.id, @tagName(f)));
+        }
+
+        /// Equivalent to asyncGroup() except it calls any module's runtime-known function ID
+        /// instead of a comptime-known name.
+        pub fn asyncGroupId(r: *const @This(), group: *std.Io.Group, fn_id: FunctionID) void {
+            group.async(r._io, callErased, .{ r._call, r._ctx, fn_id });
+        }
+
+        /// Equivalent to `concurrent`, except the task is spawned in the given `group` instead of
+        /// becoming associated with a `Future`.
+        pub fn concurrentGroup(r: *const @This(), group: *std.Io.Group, comptime f: ModuleFunctionName(M)) std.Io.ConcurrentError!void {
+            return r.concurrentGroupId(group, @field(r.id, @tagName(f)));
+        }
+
+        /// Equivalent to concurrentGroup() except it calls any module's runtime-known function ID
+        /// instead of a comptime-known name.
+        pub fn concurrentGroupId(r: *const @This(), group: *std.Io.Group, fn_id: FunctionID) std.Io.ConcurrentError!void {
+            return group.concurrent(r._io, callErased, .{ r._call, r._ctx, fn_id });
         }
     };
+}
+
+/// `std.Io` async/concurrent require a comptime-known function, and at Mod.callId time we only have
+/// a function pointer: this bridges the gap.
+fn callErased(
+    call_fn: *const fn (ctx: *anyopaque, fn_id: FunctionID) void,
+    ctx: *anyopaque,
+    fn_id: FunctionID,
+) void {
+    call_fn(ctx, fn_id);
 }
 
 pub fn ModFunctionIDs(comptime Module: type) type {
@@ -1039,7 +1123,7 @@ pub fn Modules(module_lists: anytype) type {
                     };
                 }
 
-                pub fn run(
+                pub fn call(
                     m: *const @This(),
                     comptime fn_name: ModuleFunctionName(module),
                 ) void {
@@ -1060,7 +1144,7 @@ pub fn Modules(module_lists: anytype) type {
                                 @compileError("Module ." ++ @tagName(@TypeOf(callMod).mod_name) ++ " has no mach_systems entry '." ++ @tagName(schedule_entry.@"1") ++ "'");
                             }
                             const callFn = @as(ModuleFunctionName(schedule_entry.@"0"), schedule_entry.@"1");
-                            callMod.run(callFn);
+                            callMod.call(callFn);
                         }
                         return;
                     }
@@ -1090,12 +1174,13 @@ pub fn Modules(module_lists: anytype) type {
                             var mv: Mod(M) = .{
                                 .id = undefined,
                                 ._ctx = m.modules,
-                                ._run = (struct {
-                                    pub fn run(ctx: *anyopaque, fn_id: FunctionID) void {
+                                ._io = m.modules.io,
+                                ._call = (struct {
+                                    pub fn call(ctx: *anyopaque, fn_id: FunctionID) void {
                                         const modules2: *Modules(module_lists) = @ptrCast(@alignCast(ctx));
                                         modules2.callDynamic(fn_id);
                                     }
-                                }).run,
+                                }).call,
                             };
                             inline for (M.mach_systems) |m_fn_name| {
                                 @field(mv.id, @tagName(m_fn_name)) = Module(M).getFunction(m_fn_name);
@@ -1132,7 +1217,7 @@ pub fn Modules(module_lists: anytype) type {
                     // `modules`.
 
                     switch (module_fn_name) {
-                        inline else => |fn_name| mod.run(fn_name),
+                        inline else => |fn_name| mod.call(fn_name),
                     }
                 },
             }
@@ -1355,11 +1440,11 @@ test "Mod.call" {
     defer modules.deinit(allocator);
 
     recorder.bar_ran = false;
-    modules.get(.test_module).run(.tick);
+    modules.get(.test_module).call(.tick);
     try std.testing.expect(recorder.bar_ran);
 }
 
-test "Mod.run" {
+test "Mod.callId" {
     // Records which module functions ran during the test.
     const recorder = struct {
         var foo_ran: bool = false;
@@ -1373,8 +1458,8 @@ test "Mod.run" {
         }
 
         pub fn tick(m: Mod(@This())) void {
-            // Mod.run dispatches a runtime FunctionID; `m.id.<name>` holds the ID for each system.
-            m.run(m.id.fooSystem);
+            // Mod.callId dispatches a runtime FunctionID; `m.id.<name>` holds the ID for each system.
+            m.callId(m.id.fooSystem);
         }
     };
 
@@ -1388,6 +1473,110 @@ test "Mod.run" {
     defer modules.deinit(allocator);
 
     recorder.foo_ran = false;
-    modules.get(.test_module).run(.tick);
+    modules.get(.test_module).call(.tick);
     try std.testing.expect(recorder.foo_ran);
+}
+
+test "Mod.async / asyncId / concurrent" {
+    // Records which module functions ran during the test.
+    const recorder = struct {
+        var async_ran: bool = false;
+        var async_id_ran: bool = false;
+        var concurrent_ran: bool = false;
+        var concurrent_unavailable: bool = false;
+    };
+    const test_module = struct {
+        pub const mach_module = .test_module;
+        pub const mach_systems = .{ .asyncSystem, .asyncIdSystem, .concurrentSystem, .tick };
+
+        pub fn asyncSystem() void {
+            recorder.async_ran = true;
+        }
+        pub fn asyncIdSystem() void {
+            recorder.async_id_ran = true;
+        }
+        pub fn concurrentSystem() void {
+            recorder.concurrent_ran = true;
+        }
+
+        pub fn tick(m: Mod(@This()), io: std.Io) void {
+            // Future-returning form (no group): the future must be awaited. `async` is the
+            // type-safe helper; `asyncId` takes the runtime FunctionID directly.
+            var async_future = m.async(.asyncSystem);
+            async_future.await(io);
+
+            var async_id_future = m.asyncId(m.id.asyncIdSystem);
+            async_id_future.await(io);
+
+            // Concurrent form requires the Io implementation to provide concurrency; unlike the
+            // async form it may fail with error.ConcurrencyUnavailable (e.g. the single-threaded
+            // debug Io used in these tests).
+            var concurrent_future = m.concurrent(.concurrentSystem) catch |err| switch (err) {
+                error.ConcurrencyUnavailable => {
+                    recorder.concurrent_unavailable = true;
+                    return;
+                },
+            };
+            concurrent_future.await(io);
+        }
+    };
+
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = aa.allocator();
+    defer aa.deinit();
+
+    const io = std.Options.debug_io;
+    var modules: Modules(.{test_module}) = undefined;
+    try modules.init(allocator, io);
+    defer modules.deinit(allocator);
+
+    recorder.async_ran = false;
+    recorder.async_id_ran = false;
+    recorder.concurrent_ran = false;
+    recorder.concurrent_unavailable = false;
+    modules.get(.test_module).call(.tick);
+    try std.testing.expect(recorder.async_ran);
+    try std.testing.expect(recorder.async_id_ran);
+    // The concurrent task either ran, or the Io implementation reported it could not.
+    try std.testing.expect(recorder.concurrent_ran or recorder.concurrent_unavailable);
+}
+
+test "Mod.asyncGroup / asyncGroupId / concurrentGroup" {
+    // Records how many module functions ran during the test.
+    const recorder = struct {
+        var ran: std.atomic.Value(u32) = .init(0);
+    };
+    const test_module = struct {
+        pub const mach_module = .test_module;
+        pub const mach_systems = .{ .work, .tick };
+
+        pub fn work() void {
+            _ = recorder.ran.fetchAdd(1, .monotonic);
+        }
+
+        pub fn tick(m: Mod(@This()), io: std.Io) void {
+            var group: std.Io.Group = .init;
+            // Group form (no future): tasks are owned by the group and released when it is awaited.
+            m.asyncGroup(&group, .work);
+            m.asyncGroupId(&group, m.id.work);
+            m.concurrentGroup(&group, .work) catch |err| switch (err) {
+                error.ConcurrencyUnavailable => {},
+            };
+            group.await(io) catch {};
+        }
+    };
+
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = aa.allocator();
+    defer aa.deinit();
+
+    const io = std.Options.debug_io;
+    var modules: Modules(.{test_module}) = undefined;
+    try modules.init(allocator, io);
+    defer modules.deinit(allocator);
+
+    recorder.ran.store(0, .monotonic);
+    modules.get(.test_module).call(.tick);
+    // The two async tasks always run; the concurrent one runs too if the Io supports concurrency.
+    try std.testing.expect(recorder.ran.load(.monotonic) >= 2);
 }

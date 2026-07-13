@@ -13,5 +13,5 @@ pub fn main() !void {
     // defer mods.deinit(allocator);
 
     const app = mods.get(.app);
-    app.run(.main);
+    app.call(.main);
 }
