@@ -1325,3 +1325,69 @@ test "Many fields, Many modules" {
     modules.deinit(allocator);
     aa.deinit();
 }
+
+test "Mod.call" {
+    // Records which module functions ran during the test.
+    const recorder = struct {
+        var bar_ran: bool = false;
+    };
+    const test_module = struct {
+        pub const mach_module = .test_module;
+        pub const mach_systems = .{ .barSystem, .tick };
+
+        pub fn barSystem() void {
+            recorder.bar_ran = true;
+        }
+
+        pub fn tick(m: Mod(@This())) void {
+            // Mod.call dispatches a comptime-known function by its `.name` literal.
+            m.call(.barSystem);
+        }
+    };
+
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = aa.allocator();
+    defer aa.deinit();
+
+    const io = std.Options.debug_io;
+    var modules: Modules(.{test_module}) = undefined;
+    try modules.init(allocator, io);
+    defer modules.deinit(allocator);
+
+    recorder.bar_ran = false;
+    modules.get(.test_module).run(.tick);
+    try std.testing.expect(recorder.bar_ran);
+}
+
+test "Mod.run" {
+    // Records which module functions ran during the test.
+    const recorder = struct {
+        var foo_ran: bool = false;
+    };
+    const test_module = struct {
+        pub const mach_module = .test_module;
+        pub const mach_systems = .{ .fooSystem, .tick };
+
+        pub fn fooSystem() void {
+            recorder.foo_ran = true;
+        }
+
+        pub fn tick(m: Mod(@This())) void {
+            // Mod.run dispatches a runtime FunctionID; `m.id.<name>` holds the ID for each system.
+            m.run(m.id.fooSystem);
+        }
+    };
+
+    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = aa.allocator();
+    defer aa.deinit();
+
+    const io = std.Options.debug_io;
+    var modules: Modules(.{test_module}) = undefined;
+    try modules.init(allocator, io);
+    defer modules.deinit(allocator);
+
+    recorder.foo_ran = false;
+    modules.get(.test_module).run(.tick);
+    try std.testing.expect(recorder.foo_ran);
+}
