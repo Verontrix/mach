@@ -515,30 +515,8 @@ pub const Device = struct {
             }
         }
 
-        // Query layers
-        var count: u32 = 0;
-        _ = try vki.enumerateDeviceLayerProperties(adapter.physical_device, &count, null);
-
-        const available_layers = try allocator.alloc(vk.LayerProperties, count);
-        defer allocator.free(available_layers);
-        _ = try vki.enumerateDeviceLayerProperties(adapter.physical_device, &count, available_layers.ptr);
-
-        var layers_buf: [device_layers.len][*:0]const u8 = undefined;
-        var layers = std.ArrayList([*:0]const u8).initBuffer(&layers_buf);
-        for (device_layers) |optional| {
-            for (available_layers) |available| {
-                if (std.mem.eql(
-                    u8,
-                    std.mem.sliceTo(optional, 0),
-                    std.mem.sliceTo(&available.layer_name, 0),
-                )) {
-                    layers.appendAssumeCapacity(optional);
-                    break;
-                }
-            }
-        }
-
         // Query extensions
+        var count: u32 = 0;
         _ = try vki.enumerateDeviceExtensionProperties(adapter.physical_device, null, &count, null);
 
         const available_extensions = try allocator.alloc(vk.ExtensionProperties, count);
@@ -562,11 +540,11 @@ pub const Device = struct {
             }
         }
 
+        // Device layers are deprecated and must not be set; only instance layers exist since
+        // Vulkan 1.0 (VUID-VkDeviceCreateInfo-enabledLayerCount-12384).
         var create_info = vk.DeviceCreateInfo{
             .queue_create_info_count = @intCast(queue_infos.len),
             .p_queue_create_infos = queue_infos.ptr,
-            .enabled_layer_count = @intCast(layers.items.len),
-            .pp_enabled_layer_names = layers.items.ptr,
             .enabled_extension_count = @intCast(extensions.items.len),
             .pp_enabled_extension_names = extensions.items.ptr,
         };
@@ -725,10 +703,6 @@ pub const Device = struct {
         device.processQueuedOperations();
     }
 
-    const device_layers = if (builtin.mode == .Debug)
-        &[_][*:0]const u8{"VK_LAYER_KHRONOS_validation"}
-    else
-        &.{};
     const device_extensions = &[_][*:0]const u8{vk.extensions.khr_swapchain.name};
 
     pub const ResolveKey = struct {
