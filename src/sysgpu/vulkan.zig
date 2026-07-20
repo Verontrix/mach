@@ -392,6 +392,9 @@ pub const Surface = struct {
     /// Retained by deinit of a previous SwapChain so that the next createSwapChain
     /// can pass it as old_swapchain to vkCreateSwapchainKHR for a safe handoff.
     old_vk_swapchain: vk.SwapchainKHR = .null_handle,
+    /// Device that owns old_vk_swapchain, needed to destroy it if no further
+    /// swapchain is created before the surface is destroyed.
+    old_vk_swapchain_device: vk.Device = .null_handle,
 
     pub fn init(instance: *Instance, desc: *const sysgpu.Surface.Descriptor) !*Surface {
         const vk_instance = instance.vk_instance;
@@ -448,6 +451,11 @@ pub const Surface = struct {
     pub fn deinit(surface: *Surface) void {
         const vk_instance = surface.instance.vk_instance;
 
+        // A swapchain stashed for old_swapchain handoff must be destroyed before the surface;
+        // destroying a VkSurfaceKHR with a live swapchain is invalid and leaks the swapchain.
+        if (surface.old_vk_swapchain != .null_handle) {
+            vkd.destroySwapchainKHR(surface.old_vk_swapchain_device, surface.old_vk_swapchain, null);
+        }
         vki.destroySurfaceKHR(vk_instance, surface.vk_surface, null);
         allocator.destroy(surface);
     }
@@ -1001,6 +1009,7 @@ pub const SwapChain = struct {
         // Consume old swapchain handle from surface for a safe Vulkan handoff.
         const old_vk_swapchain = surface.old_vk_swapchain;
         surface.old_vk_swapchain = .null_handle;
+        surface.old_vk_swapchain_device = .null_handle;
 
         const sc = try allocator.create(SwapChain);
 
@@ -1126,6 +1135,7 @@ pub const SwapChain = struct {
         // Stash the swapchain handle on the surface so the next createSwapChain
         // can pass it as old_swapchain to vkCreateSwapchainKHR.
         sc.surface.old_vk_swapchain = sc.vk_swapchain;
+        sc.surface.old_vk_swapchain_device = vk_device;
         allocator.free(sc.textures);
         allocator.free(sc.texture_views);
         allocator.destroy(sc);
@@ -1204,7 +1214,16 @@ pub const SwapChain = struct {
     fn handleOutOfDate(sc: *SwapChain) void {
         sc.current_texture_view = null;
         const queue = sc.device.getQueue() catch return;
-        queue.command_encoder = null;
+        if (queue.command_encoder) |command_encoder| {
+            command_encoder.manager.release();
+            queue.command_encoder = null;
+        }
+        // Queued command buffers already had reference_tracker.submit() called on them, so their
+        // trackers must be deinitialized here to undo it; they will never reach flush.
+        for (queue.command_buffers.items) |command_buffer| {
+            command_buffer.reference_tracker.deinit();
+            command_buffer.manager.release();
+        }
         queue.command_buffers.clearRetainingCapacity();
     }
 };
@@ -1489,6 +1508,15 @@ pub const Texture = struct {
 
     pub fn deinit(texture: *Texture) void {
         const vk_device = texture.device.vk_device;
+
+        // The queue's internal encoder may still hold un-submitted init barriers referencing this
+        // image (e.g. swapchain recreation before the first submit); recording them after the
+        // image is destroyed crashes the driver.
+        if (texture.device.queue) |*queue| {
+            if (queue.command_encoder) |command_encoder| {
+                command_encoder.state_tracker.discardImageBarriers(texture.image);
+            }
+        }
 
         if (texture.swapchain == null) {
             vkd.freeMemory(vk_device, texture.memory, null);
@@ -3061,6 +3089,19 @@ pub const StateTracker = struct {
                 }
             }
             tracker.copy_textures.clearRetainingCapacity();
+        }
+    }
+
+    /// Removes any pending barriers referencing the given image. Called when the image is about
+    /// to be destroyed so that a later flush does not record a barrier on a dead handle.
+    pub fn discardImageBarriers(tracker: *StateTracker, image: vk.Image) void {
+        var i: usize = 0;
+        while (i < tracker.image_barriers.items.len) {
+            if (tracker.image_barriers.items[i].image == image) {
+                _ = tracker.image_barriers.orderedRemove(i);
+            } else {
+                i += 1;
+            }
         }
     }
 
