@@ -202,9 +202,9 @@ frame: mach.time.Frequency,
 input: mach.time.Frequency,
 
 /// Mutex protecting the render snapshot itself (e.g. render_graph or snapshotted objects.)
-/// The app thread holds this between snapshotStart and snapshotEnd, and the render thread
-/// holds this during the whole render to prevent the app thread from getting ahead duplicate
-/// frames.
+/// The app thread holds this between snapshotStart and snapshotEnd. The render thread holds
+/// this only while recording GPU commands (on_render) in renderFrame, releasing it before
+/// swapchain presentation so the app thread can start its next snapshot while it presents.
 render_mu: std.Io.Mutex = .init,
 
 /// Signaled by the app thread in snapshotEnd (while holding render_mu) to indicate a new frame is
