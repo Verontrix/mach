@@ -713,8 +713,9 @@ const RenderLoop = struct {
     fn renderThreadFn(self: *RenderLoop) void {
         while (self.running.load(.acquire)) {
             // Wait for the app to signal snapshotEnd() and indicate a frame is ready for drawing.
+            // frame_ready is reset inside Core.renderFrame once render_mu is held and the snapshot
+            // is actually consumed.
             self.core.frame_ready.waitUncancelable(self.io);
-            self.core.frame_ready.reset();
 
             // If we want to stop the render loop, exit now.
             if (!self.running.load(.acquire)) break;

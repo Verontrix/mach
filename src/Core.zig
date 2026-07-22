@@ -207,8 +207,10 @@ input: mach.time.Frequency,
 /// frames.
 render_mu: std.Io.Mutex = .init,
 
-/// Signaled by the app thread after snapshotEnd to indicate a new frame is ready
-/// for the render thread to consume.
+/// Signaled by the app thread in snapshotEnd (while holding render_mu) to indicate a new frame is
+/// ready for the render thread to consume. Reset by the render thread in renderFrame under
+/// render_mu (the point where the snapshot is actually consumed, so a signal cannot outlive its
+/// snapshot and wake the render thread to re-render identical content.)
 frame_ready: std.Io.Event = .unset,
 
 // Internal module state
@@ -366,6 +368,11 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
         core.render_mu.lockUncancelable(io);
         defer core.render_mu.unlock(io);
 
+        // We now consume the latest snapshot, so clear frame_ready. snapshotEnd sets it while
+        // holding render_mu, so any set not cleared here comes from a snapshot published after
+        // this render and must trigger another frame.
+        core.frame_ready.reset();
+
         core.windows.lockShared();
         defer core.windows.unlockShared();
         var windows = core.windows.slice();
@@ -437,8 +444,12 @@ pub fn snapshotStart(core: *Core, io: std.Io) !void {
 
 /// End submission of a snapshot for rendering the next frame.
 pub fn snapshotEnd(core: *Core, io: std.Io) void {
-    core.render_mu.unlock(io);
+    // Set frame_ready while still holding render_mu. The render thread resets it only after
+    // acquiring render_mu in renderFrame, so the mutex orders every set/reset pair: a set either
+    // happens before the reset that consumes this snapshot, or after the render thread releases the
+    // mutex (correctly triggering the next frame).
     core.frame_ready.set(io);
+    core.render_mu.unlock(io);
 }
 
 /// Sets the window title using a format string. Core owns the resulting allocation and frees it
