@@ -72,6 +72,7 @@ pub fn build(b: *std.Build) !void {
     var examples = [_]Example{
         .{ .name = "core-custom-entrypoint", .deps = &.{} },
         .{ .name = "core-triangle", .deps = &.{} },
+        .{ .name = "core-triangles", .deps = &.{} },
         .{ .name = "core-transparent-window", .deps = &.{} },
         .{ .name = "custom-renderer", .deps = &.{} },
         .{ .name = "glyphs", .deps = &.{ .assets, .freetype } },
