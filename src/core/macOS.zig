@@ -817,10 +817,13 @@ fn displayLinkWake(n: *NativeState, drawable: *objc.quartz_core.MetalDrawable) v
     if (prev != 0) {
         const prev_ptr: *objc.quartz_core.MetalDrawable = @ptrFromInt(prev);
         prev_ptr.release();
+    } else {
+        // Signal only when the pending slot transitions from empty to occupied. While a drawable
+        // remains pending, the existing semaphore credit (or the render thread that consumed it)
+        // already accounts for that slot. Signaling for every replacement would bank stale vsync
+        // credits and let later frames bypass display pacing.
+        _ = objc.system.dispatch_semaphore_signal(n.ready_sem);
     }
-
-    // Signal to the render thread that a vsync has occurred.
-    _ = objc.system.dispatch_semaphore_signal(n.ready_sem);
 }
 
 // TODO(core): port libdispatch and use it instead of doing this directly.
