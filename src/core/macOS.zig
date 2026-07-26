@@ -511,7 +511,6 @@ const NativeState = struct {
     window: *objc.app_kit.Window,
     view: *MACHView,
     metal_descriptor: *gpu.Surface.DescriptorFromMetalLayer,
-    ready_sem: objc.system.dispatch_semaphore_t,
     surface: *metal.Surface,
 
     /// Global event monitor for command-key keyUp workaround. Removed on window teardown.
@@ -624,11 +623,12 @@ fn disableMouseCapture(n: *NativeState, denied: bool) void {
 }
 
 var global_render_loop: ?*RenderLoop = null;
+var global_render_wake: std.Io.Event = .unset;
 var did_set_app_activation_policy: bool = false;
 
 /// Shared render loop for all windows. The render thread waits for the app thread's snapshot
-/// (frame_ready), then waits for vsync via one window's display link semaphore, applies pending
-/// swap chain updates, and calls Core.renderFrame to render all windows sequentially.
+/// (frame_ready), then waits until any display link has a drawable, applies pending swap chain
+/// updates, and calls Core.renderFrame to render all windows sequentially.
 const RenderLoop = struct {
     core: *Core = undefined,
     core_mod: mach.Mod(Core) = undefined,
@@ -686,9 +686,9 @@ const RenderLoop = struct {
     fn stop(self: *RenderLoop) void {
         // Signal the render thread to exit.
         self.running.store(false, .release);
+        global_render_wake.set(self.io);
 
-        // The render thread may be blocked on dispatch_semaphore_wait for a vsync signal. Stop each
-        // window's display link and signal its semaphore to unblock the render thread.
+        // Stop each window's display link.
         {
             self.core.windows.lockShared();
             defer self.core.windows.unlockShared();
@@ -696,7 +696,6 @@ const RenderLoop = struct {
             while (windows.next()) |window_id| {
                 if (self.core.windows.get(window_id, .native)) |n| {
                     n.view.call(.stopDisplayLink, .{});
-                    _ = objc.system.dispatch_semaphore_signal(n.ready_sem);
                 }
             }
         }
@@ -707,6 +706,37 @@ const RenderLoop = struct {
 
         // Wait for render thread to exit.
         self.thread.join();
+    }
+
+    /// Returns whether every native window uses a display link and none has a pending drawable.
+    fn shouldWaitForDrawable(rl: *RenderLoop) bool {
+        rl.core.windows.lockShared();
+        defer rl.core.windows.unlockShared();
+
+        var found_window = false;
+        var windows = rl.core.windows.slice();
+        while (windows.next()) |window_id| {
+            const n = rl.core.windows.get(window_id, .native) orelse continue;
+            found_window = true;
+            if (!@atomicLoad(bool, &n.surface.use_display_link, .acquire)) return false;
+
+            const pending_ptr: *const usize = @ptrCast(&n.surface.pending_drawable);
+            if (@atomicLoad(usize, pending_ptr, .acquire) != 0) return false;
+        }
+        return found_window;
+    }
+
+    /// Waits until rendering can proceed without treating a wake as proof that a drawable exists.
+    fn waitForDrawable(rl: *RenderLoop) bool {
+        while (rl.running.load(.acquire)) {
+            if (!rl.shouldWaitForDrawable()) return true;
+
+            // Reset before rechecking the predicate so a concurrent wake cannot be lost.
+            global_render_wake.reset();
+            if (!rl.shouldWaitForDrawable()) return true;
+            global_render_wake.waitUncancelable(rl.io);
+        }
+        return false;
     }
 
     /// Render thread entry point.
@@ -720,39 +750,10 @@ const RenderLoop = struct {
             // If we want to stop the render loop, exit now.
             if (!self.running.load(.acquire)) break;
 
-            // vsync: if ALL windows have an active display link, wait for one to signal vsync. If
-            // ANY window lacks a display link (vsync off, or not yet attached), skip the wait: that
-            // window needs uncapped rendering, and display-link windows will naturally skip frames
-            // when no drawable is available (getCurrentTextureView returns null). We check
-            // use_display_link (the actual hardware state) rather than vsync_mode (the desired
-            // state that the main thread hasn't applied yet).
-            {
-                var all_have_display_link = true;
-                var wait_n: ?*NativeState = null;
-                {
-                    self.core.windows.lockShared();
-                    defer self.core.windows.unlockShared();
-
-                    var windows = self.core.windows.slice();
-                    while (windows.next()) |window_id| {
-                        const n = self.core.windows.get(window_id, .native) orelse continue;
-                        if (!@atomicLoad(bool, &n.surface.use_display_link, .acquire)) {
-                            all_have_display_link = false;
-                            break;
-                        }
-                        if (wait_n == null) wait_n = n;
-                    }
-                }
-
-                if (all_have_display_link) {
-                    if (wait_n) |n| {
-                        _ = objc.system.dispatch_semaphore_wait(
-                            n.ready_sem,
-                            objc.system.DISPATCH_TIME_FOREVER,
-                        );
-                    }
-                }
-            }
+            // If every window is display-linked, wait until one has a drawable. Uncapped windows
+            // skip this wait, while display-linked windows without a drawable skip rendering in
+            // getCurrentTextureView.
+            if (!self.waitForDrawable()) break;
 
             // Now that we waited for vsync, check if we should exit again before rendering the
             // frame.
@@ -818,11 +819,9 @@ fn displayLinkWake(n: *NativeState, drawable: *objc.quartz_core.MetalDrawable) v
         const prev_ptr: *objc.quartz_core.MetalDrawable = @ptrFromInt(prev);
         prev_ptr.release();
     } else {
-        // Signal only when the pending slot transitions from empty to occupied. While a drawable
-        // remains pending, the existing semaphore credit (or the render thread that consumed it)
-        // already accounts for that slot. Signaling for every replacement would bank stale vsync
-        // credits and let later frames bypass display pacing.
-        _ = objc.system.dispatch_semaphore_signal(n.ready_sem);
+        // Wake only when the pending slot transitions from empty to occupied. The render loop
+        // rechecks every window's pending slot after each coalesced wake.
+        global_render_wake.set(n.io);
     }
 }
 
@@ -906,8 +905,7 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
         if (@atomicLoad(bool, &n.surface.use_display_link, .acquire)) {
             RenderLoop.detachDisplayLink(n);
         }
-        // Signal the sem so the render thread (if blocked waiting on it) can unblock.
-        _ = objc.system.dispatch_semaphore_signal(n.ready_sem);
+        global_render_wake.set(n.io);
         n.window.setIsVisible(false);
         n.view.release();
         n.window.release();
@@ -1036,8 +1034,8 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
                 .vsync_mode = core_window.vsync_mode,
             };
 
-            // Wake the render thread so it picks up the swap chain update promptly.
-            _ = objc.system.dispatch_semaphore_signal(n.ready_sem);
+            // Wake the render thread so it rechecks display-link and drawable state.
+            global_render_wake.set(n.io);
         }
     }
 
@@ -1078,8 +1076,6 @@ fn initWindow(
         .core_mod = core_mod,
         .window_id = window_id,
         .io = io,
-        .ready_sem = objc.system.dispatch_semaphore_create(0) orelse
-            return error.SemaphoreCreateFailed,
 
         // Initialized later in this function
         .window = undefined,
@@ -1243,6 +1239,7 @@ fn initWindow(
 fn ensureRenderLoop(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
     if (global_render_loop != null) return;
 
+    global_render_wake.reset();
     const rl = try core.allocator.create(RenderLoop);
     rl.* = .{ .core = core, .core_mod = core_mod, .io = io };
     try rl.start();
