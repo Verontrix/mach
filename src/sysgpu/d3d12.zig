@@ -1398,7 +1398,11 @@ pub const SwapChain = struct {
         device.processQueuedOperations();
 
         // Swap Chain
-        const back_buffer_count: u32 = @min(desc.max_buffered_frames, max_back_buffer_count);
+        const back_buffer_count: u32 = std.math.clamp(
+            desc.preferred_image_count,
+            2,
+            max_back_buffer_count,
+        );
         var swap_chain_desc = c.DXGI_SWAP_CHAIN_DESC1{
             .Width = desc.width,
             .Height = desc.height,

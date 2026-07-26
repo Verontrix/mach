@@ -642,8 +642,10 @@ const RenderLoop = struct {
     }
 
     /// Starts the CAMetalDisplayLink for a window. Called during window creation and when
-    /// vsync is re-enabled at runtime.
-    fn attachDisplayLink(n: *NativeState) void {
+    /// configuring a vsync mode at runtime.
+    fn attachDisplayLink(n: *NativeState, preferred_image_count: u32) void {
+        n.surface.layer.setMaximumDrawableCount(std.math.clamp(preferred_image_count, 2, 3));
+
         // Tell SwapChain.getCurrentTextureView (on the render thread) to consume display link
         // drawables instead of calling nextDrawable. This MUST be set before startDisplayLink,
         // because once the display link is started, Metal forbids nextDrawable() calls and the
@@ -782,10 +784,7 @@ const RenderLoop = struct {
                         .double, .adaptive, .low_latency => .fifo,
                         .triple => .fifo,
                     };
-                    core_window.swap_chain_descriptor.max_buffered_frames = switch (update.vsync_mode) {
-                        .double, .adaptive, .low_latency => 2,
-                        .triple, .none_low_latency, .none_max_throughput => 3,
-                    };
+                    core_window.swap_chain_descriptor.preferred_image_count = update.vsync_mode.preferredImageCount();
                     core_window.swap_chain.release();
                     core_window.swap_chain = core_window.device.createSwapChain(
                         core_window.surface,
@@ -1014,14 +1013,11 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             try ensureRenderLoop(core, core_mod, io);
             const want_vsync = !core_window.vsync_mode.isNone();
 
-            // Only detach/attach the display link when transitioning between vsync-on and
-            // vsync-off. Switching between vsync-on modes (e.g. .double → .triple) only
-            // needs a swap chain recreation — the display link is already running.
+            // CAMetalLayer drawable count must be configured before attaching CAMetalDisplayLink.
             const have_display_link = @atomicLoad(bool, &n.surface.use_display_link, .acquire);
-            if (want_vsync and !have_display_link) {
-                RenderLoop.attachDisplayLink(n);
-            } else if (!want_vsync and have_display_link) {
-                RenderLoop.detachDisplayLink(n);
+            if (have_display_link) RenderLoop.detachDisplayLink(n);
+            if (want_vsync) {
+                RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
             }
 
             // Queue a swap chain recreation for the render thread.
@@ -1226,7 +1222,7 @@ fn initWindow(
     // CAMetalDisplayLink so vsync pacing begins immediately.
     core_window = core.windows.getValue(window_id);
     n.surface = @ptrCast(@alignCast(core_window.surface));
-    RenderLoop.attachDisplayLink(n);
+    RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
 
     // Show the window only after the surface and display link are ready, so the user never sees
     // the window without rendered content on it.

@@ -463,7 +463,7 @@ pub const SwapChain = struct {
             // present() doesn't block per-window.
             layer.setDisplaySyncEnabled(false);
         } else {
-            layer.setMaximumDrawableCount(desc.max_buffered_frames);
+            layer.setMaximumDrawableCount(std.math.clamp(desc.preferred_image_count, 2, 3));
             layer.setDisplaySyncEnabled(desc.present_mode != .immediate);
         }
 

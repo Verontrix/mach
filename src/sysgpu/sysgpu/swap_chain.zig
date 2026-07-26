@@ -13,9 +13,10 @@ pub const SwapChain = opaque {
         width: u32,
         height: u32,
         present_mode: PresentMode,
-        /// Maximum number of frames that can be buffered ahead of display.
-        /// On Metal: maps to CAMetalLayer.maximumDrawableCount (2 or 3).
-        max_buffered_frames: u32 = 2,
+        /// Preferred number of presentable swap chain images.
+        ///
+        /// This does not limit how many frames the application may render ahead of presentation.
+        preferred_image_count: u32 = 2,
     };
 
     /// Returns a backend-specific handle for the currently-acquired frame, or null if no frame

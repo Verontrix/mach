@@ -349,11 +349,7 @@ pub fn initWindow(core: *Core, window_id: mach.ObjectID) !void {
             .triple => .fifo,
             .low_latency => .mailbox,
         },
-        .max_buffered_frames = switch (core_window.vsync_mode) {
-            .double, .adaptive => 2,
-            .triple, .low_latency, .none_max_throughput => 3,
-            .none_low_latency => 2,
-        },
+        .preferred_image_count = core_window.vsync_mode.preferredImageCount(),
     };
     core_window.swap_chain = core_window.device.createSwapChain(core_window.surface, &core_window.swap_chain_descriptor);
 
@@ -1374,16 +1370,14 @@ pub const DisplayMode = enum {
 /// |------------------------|--------------|------------------------------------|-----------------------------|------------------------------------------------|-----------------|-----------------------|
 /// | `.double`              | fifo         | displaySync=on, 2 drawables        | displaySync=on, 2 drawables | 2 buffers, flip-sequential                     | minImageCount=2 | requestAnimationFrame |
 /// | `.triple`              | fifo         | displaySync=on, 3 drawables        | displaySync=on, 3 drawables | 3 buffers, flip-discard                        | minImageCount=3 | same as `.double`     |
-/// | `.low_latency`         | mailbox      | same as `.double`                  | same as `.double`           | 3 buffers, flip-discard, SetMaxFrameLatency(1) | minImageCount=3 | same as `.double`     |
+/// | `.low_latency`         | mailbox      | same as `.double`                  | same as `.double`           | 2 buffers, flip-discard, SetMaxFrameLatency(1) | minImageCount+1 | same as `.double`     |
 /// | `.adaptive`            | fifo_relaxed | same as `.double`                  | same as `.double`           | `DXGI_PRESENT_ALLOW_TEARING` per-present       | minImageCount=2 | same as `.double`     |
-/// | `.none_low_latency`    | immediate    | displaySync=off, 3 drawables[1][2] | same as `.double`[2]        | 2 buffers, `SetMaxFrameLatency(1)`, waitable   | minImageCount=2 | same as `.double`     |
-/// | `.none_max_throughput` | immediate    | displaySync=off, 3 drawables[2]    | same as `.double`[2]        | 3 buffers, `SetMaxFrameLatency(2)`             | minImageCount=3 | same as `.double`     |
+/// | `.none_low_latency`    | immediate    | displaySync=off, 2 drawables[1]    | same as `.double`[2]        | 2 buffers, `SetMaxFrameLatency(1)`, waitable   | minImageCount=2 | same as `.double`     |
+/// | `.none_max_throughput` | immediate    | displaySync=off, 3 drawables[1]    | same as `.double`[2]        | 3 buffers, `SetMaxFrameLatency(2)`             | minImageCount=3 | same as `.double`     |
 ///
-/// 1. Metal clamps to 3 drawables when displaySync is off, so `.none_low_latency` is the same as
-///    `.none_max_throughput`.
-/// 2. Metal APIs generally do not allow outpacing the compositors' frame rate, so .none vsync
+/// 1. Metal APIs generally do not allow outpacing the compositors' frame rate, so .none vsync
 ///    typically run about 3x the usual refresh rate, although sometimes higher in fullscreen.
-/// 3. iOS: displaySyncEnabled is always true; disabling vsync is not supported.
+/// 2. iOS: displaySyncEnabled is always true; disabling vsync is not supported.
 ///
 pub const VSyncMode = enum {
     /// May cause tearing, may stall GPU. Aims for lowest latency, not highest FPS.
@@ -1410,6 +1404,17 @@ pub const VSyncMode = enum {
 
     pub fn isNone(mode: VSyncMode) bool {
         return mode == .none_low_latency or mode == .none_max_throughput;
+    }
+
+    /// Returns the preferred number of presentable swap chain images.
+    ///
+    /// This is not the number of frames the application may render ahead of presentation.
+    pub fn preferredImageCount(mode: VSyncMode) u32 {
+        return switch (mode) {
+            .double, .low_latency, .adaptive => 2,
+            .triple, .none_max_throughput => 3,
+            .none_low_latency => 2,
+        };
     }
 };
 
@@ -1465,4 +1470,13 @@ test {
     @import("std").testing.refAllDecls(KeyMods);
     @import("std").testing.refAllDecls(DisplayMode);
     @import("std").testing.refAllDecls(CursorShape);
+}
+
+test "VSyncMode selects the preferred swap chain image count" {
+    try std.testing.expectEqual(2, VSyncMode.double.preferredImageCount());
+    try std.testing.expectEqual(3, VSyncMode.triple.preferredImageCount());
+    try std.testing.expectEqual(2, VSyncMode.low_latency.preferredImageCount());
+    try std.testing.expectEqual(2, VSyncMode.adaptive.preferredImageCount());
+    try std.testing.expectEqual(2, VSyncMode.none_low_latency.preferredImageCount());
+    try std.testing.expectEqual(3, VSyncMode.none_max_throughput.preferredImageCount());
 }
