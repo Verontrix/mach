@@ -275,7 +275,7 @@ pub fn render(
         try core.fmtTitle(
             app.window,
             "text [ {d}fps ] [ Input {d}hz ]",
-            .{ core.frame.rate, core.input.rate },
+            .{ core.windows.get(app.window, .frame).rate, core.input.rate },
         );
     }
 }

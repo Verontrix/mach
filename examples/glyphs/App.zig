@@ -387,7 +387,7 @@ pub fn render(
         try core.fmtTitle(
             app.window,
             "glyphs [ {d}fps ] [ Input {d}hz ] [ Sprites: {d} ]",
-            .{ core.frame.rate, core.input.rate, app.sprites },
+            .{ core.windows.get(app.window, .frame).rate, core.input.rate, app.sprites },
         );
     }
 }

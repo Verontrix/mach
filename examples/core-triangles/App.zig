@@ -263,7 +263,7 @@ pub fn render(app: *App, core: *mach.Core) !void {
         _ = app.log_timer.lap();
         const vsync = core.windows.get(app.window, .vsync_mode);
         log.info("[ {d}fps ] [ input {d}hz ] [ triangles: {d} ] [ vsync: {s} ]", .{
-            core.frame.rate, core.input.rate, triangle_count, @tagName(vsync),
+            window.frame.rate, core.input.rate, triangle_count, @tagName(vsync),
         });
     }
 }

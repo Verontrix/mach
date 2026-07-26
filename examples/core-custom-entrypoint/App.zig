@@ -156,7 +156,7 @@ pub fn render(core: *mach.Core, app: *App) !void {
         core.windows.lock();
         defer core.windows.unlock();
         try core.fmtTitle(app.window, "core-custom-entrypoint [ {d}fps ] [ Input {d}hz ]", .{
-            core.frame.rate, core.input.rate,
+            core.windows.get(app.window, .frame).rate, core.input.rate,
         });
     }
 }

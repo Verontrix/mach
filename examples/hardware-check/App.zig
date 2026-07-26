@@ -360,7 +360,7 @@ pub fn appTick(
                         "(2) close window",
                     .{
                         window_num,
-                        core.frame.rate,
+                        core.windows.get(window_id, .frame).rate,
                         core.input.rate,
                         num_spawned,
                         window_count,
@@ -379,7 +379,12 @@ pub fn appTick(
                 try core.fmtTitle(
                     window_id,
                     "hardware-check window {d} [ {d}fps ] [ Input {d}hz ] [ Sprites: {d} ]",
-                    .{ window_num, core.frame.rate, core.input.rate, num_spawned },
+                    .{
+                        window_num,
+                        core.windows.get(window_id, .frame).rate,
+                        core.input.rate,
+                        num_spawned,
+                    },
                 );
             }
         }

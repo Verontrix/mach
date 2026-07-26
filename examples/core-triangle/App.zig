@@ -151,7 +151,7 @@ pub fn render(app: *App, core: *mach.Core) !void {
         core.windows.lock();
         defer core.windows.unlock();
         try core.fmtTitle(app.window, "core-triangle [ {d}fps ] [ Input {d}hz ]", .{
-            core.frame.rate, core.input.rate,
+            core.windows.get(app.window, .frame).rate, core.input.rate,
         });
     }
 }

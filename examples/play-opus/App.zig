@@ -190,7 +190,7 @@ pub fn appTick(
         core.windows.lock();
         defer core.windows.unlock();
         try core.fmtTitle(app.window, "play-opus [ {d}fps ] [ Input {d}hz ]", .{
-            core.frame.rate, core.input.rate,
+            core.windows.get(app.window, .frame).rate, core.input.rate,
         });
     }
 }

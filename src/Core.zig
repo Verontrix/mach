@@ -85,6 +85,9 @@ windows: mach.Objects(
         /// Render callback
         on_render: ?mach.FunctionID = null,
 
+        /// Frequency at which this window's render callback runs (read-only).
+        frame: mach.time.Frequency = .{ .target = 0 },
+
         /// Texture format of the framebuffer (read-only)
         framebuffer_format: gpu.Texture.Format = .bgra8_unorm,
 
@@ -198,9 +201,6 @@ on_exit: ?mach.FunctionID = null,
 /// Current state of the application.
 state: std.atomic.Value(State) = .init(.running),
 
-/// Frequency of render passes containing at least one window. This is not a per-window
-/// presentation rate.
-frame: mach.time.Frequency,
 input: mach.time.Frequency,
 input_periodic_deadline: mach.time.PeriodicDeadline = .{},
 
@@ -251,7 +251,6 @@ pub fn init(core: *Core, allocator: std.mem.Allocator, io: std.Io) !void {
         .render_graph = undefined,
 
         .input = .{ .target = 0 },
-        .frame = .{ .target = 1 },
     };
 
     // TODO(leak)
@@ -261,7 +260,6 @@ pub fn init(core: *Core, allocator: std.mem.Allocator, io: std.Io) !void {
     // TODO(leak)
     try mach.initGraph(&core.render_graph, allocator, io, .render);
 
-    core.frame.start(io);
     core.input.start(io);
 }
 
@@ -269,6 +267,8 @@ pub fn init(core: *Core, allocator: std.mem.Allocator, io: std.Io) !void {
 pub fn initWindow(core: *Core, window_id: mach.ObjectID) !void {
     var core_window = core.windows.getValue(window_id);
     defer core.windows.setValueRaw(window_id, core_window);
+
+    core_window.frame.start(core.io);
 
     // All windows share the same GPU device; only the surface and swap chain are per-window.
     const existing_gpu = blk: {
@@ -377,8 +377,8 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
         core.render_mu.lockUncancelable(io);
         defer core.render_mu.unlock(io);
 
-        core.windows.lockShared();
-        defer core.windows.unlockShared();
+        core.windows.lock();
+        defer core.windows.unlock();
         var windows = core.windows.slice();
         while (windows.next()) |window_id| {
             const core_window = core.windows.getValue(window_id);
@@ -394,20 +394,22 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             core.window = window_id;
 
             // Run on_render for the window with the windows lock released so user code may take it.
-            core.windows.unlockShared();
+            core.windows.unlock();
             core_mod.callId(on_render);
-            core.windows.lockShared();
 
             // Ensure nobody reads the window outside on_render.
             core.window = undefined;
 
+            core.windows.lock();
+            var frame = core.windows.get(window_id, .frame);
+            frame.tick();
+            core.windows.setRaw(window_id, .frame, frame);
             Platform.didRenderWindow(core, window_id);
         }
     }
 
     // Present only the selected swap chains outside render_mu so the app thread can prepare the
     // next frame during GPU submission.
-    const rendered = core.present_swap_chains.items.len != 0;
     for (core.present_swap_chains.items) |swap_chain| {
         swap_chain.present();
         swap_chain.release();
@@ -416,9 +418,6 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
 
     // Device tick.
     if (shared_device) |device| mach.sysgpu.Impl.deviceTick(device);
-
-    // Global render-pass rate counter.
-    if (rendered) core.frame.tick();
 }
 
 pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
@@ -465,7 +464,7 @@ pub fn snapshotEnd(core: *Core, io: std.Io) void {
 /// core.windows.lock();
 /// defer core.windows.unlock();
 /// try core.fmtTitle(window_id, "myapp [ {d}fps ] [ Input {d}hz ]", .{
-///     core.frame.rate, core.input.rate,
+///     core.windows.get(window_id, .frame).rate, core.input.rate,
 /// });
 /// ```
 pub fn fmtTitle(

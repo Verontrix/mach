@@ -636,7 +636,7 @@ var did_set_app_activation_policy: bool = false;
 
 /// Returns whether a window can consume the latest published snapshot.
 ///
-/// Caller must hold core.windows.lockShared.
+/// Caller must hold core.windows.lock or core.windows.lockShared.
 pub fn shouldRenderWindow(core: *Core, window_id: mach.ObjectID) bool {
     const core_window = core.windows.getValue(window_id);
     const n = core_window.native orelse return false;
@@ -655,7 +655,7 @@ pub fn shouldRenderWindow(core: *Core, window_id: mach.ObjectID) bool {
 
 /// Records that a window consumed the latest published snapshot.
 ///
-/// Caller must hold core.windows.lockShared.
+/// Caller must hold core.windows.lock.
 pub fn didRenderWindow(core: *Core, window_id: mach.ObjectID) void {
     const n = core.windows.get(window_id, .native) orelse return;
     n.rendered_snapshot_generation = core.snapshot_generation.load(.acquire);
