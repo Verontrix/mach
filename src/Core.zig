@@ -1373,7 +1373,7 @@ pub const DisplayMode = enum {
 /// | `.low_latency`         | mailbox      | same as `.double`                  | same as `.double`           | 2 buffers, flip-discard, SetMaxFrameLatency(1) | minImageCount+1 | same as `.double`     |
 /// | `.adaptive`            | fifo_relaxed | same as `.double`                  | same as `.double`           | `DXGI_PRESENT_ALLOW_TEARING` per-present       | minImageCount=2 | same as `.double`     |
 /// | `.none_low_latency`    | immediate    | displaySync=off, 2 drawables[1]    | same as `.double`[2]        | 2 buffers, `SetMaxFrameLatency(1)`, waitable   | minImageCount=2 | same as `.double`     |
-/// | `.none_max_throughput` | immediate    | displaySync=off, 3 drawables[1]    | same as `.double`[2]        | 3 buffers, `SetMaxFrameLatency(2)`             | minImageCount=3 | same as `.double`     |
+/// | `.none_max_throughput` | immediate    | displaySync=off, 2 drawables[1]    | same as `.double`[2]        | 3 buffers, `SetMaxFrameLatency(2)`             | minImageCount=3 | same as `.double`     |
 ///
 /// 1. Metal APIs generally do not allow outpacing the compositors' frame rate, so .none vsync
 ///    typically run about 3x the usual refresh rate, although sometimes higher in fullscreen.

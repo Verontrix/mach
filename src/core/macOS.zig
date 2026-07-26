@@ -1222,7 +1222,7 @@ fn initWindow(
     // CAMetalDisplayLink so vsync pacing begins immediately.
     core_window = core.windows.getValue(window_id);
     n.surface = @ptrCast(@alignCast(core_window.surface));
-    RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
+    if (!core_window.vsync_mode.isNone()) RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
 
     // Show the window only after the surface and display link are ready, so the user never sees
     // the window without rendered content on it.
