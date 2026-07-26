@@ -23,8 +23,8 @@ pub const SwapChain = opaque {
     /// is acquired or the backend does not expose one.
     ///
     /// On Metal this is the `CAMetalDrawable` (castable to `id<CAMetalDrawable>`). The handle is
-    /// borrowed: it is valid from a successful `getCurrentTextureView()` until the next
-    /// `getCurrentTextureView()` call; retain it if you need it longer. Do not present it
+    /// borrowed: it is valid from a successful `getCurrentTextureView()` until `present()` or the
+    /// next `getCurrentTextureView()` call; retain it if you need it longer. Do not present it
     /// yourself; `present()` remains responsible for presentation.
     pub inline fn getCurrentNativeHandle(swap_chain: *SwapChain) ?*anyopaque {
         return Impl.swapChainGetCurrentNativeHandle(swap_chain);

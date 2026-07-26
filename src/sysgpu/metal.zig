@@ -517,7 +517,7 @@ pub const SwapChain = struct {
     }
 
     /// Returns the currently-acquired `CAMetalDrawable`, or null if no frame is acquired.
-    /// Borrowed: valid until the next getCurrentTextureView() call, which releases it.
+    /// Borrowed: valid until present() or the next getCurrentTextureView() call.
     pub fn getCurrentNativeHandle(swapchain: *SwapChain) ?*anyopaque {
         return @ptrCast(swapchain.current_drawable);
     }
@@ -527,6 +527,9 @@ pub const SwapChain = struct {
         defer objc.autoreleasePoolPop(pool);
 
         if (swapchain.current_drawable) |drawable| {
+            swapchain.current_drawable = null;
+            defer drawable.release();
+
             const queue = try swapchain.device.getQueue();
             const command_buffer: *mtl.CommandBuffer = queue.command_queue.commandBuffer() orelse {
                 return error.NewCommandBufferFailed;

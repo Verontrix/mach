@@ -95,6 +95,7 @@ const MACHWindowDelegate = objc.objc.DefineClass(struct {
             .pixel_density = pixel_density,
             .vsync_mode = core_window.vsync_mode,
         };
+        global_render_wake.set(n.io);
 
         n.core.pushEvent(.{ .resize = .{
             .window_id = n.window_id,
@@ -520,6 +521,13 @@ const NativeState = struct {
     /// recreate the swap chain before the next frame.
     pending_swap_chain_update: ?PendingSwapChainUpdate = null,
 
+    /// Latest world snapshot rendered by this window. Accessed only by the render thread.
+    rendered_snapshot_generation: u64 = 0,
+
+    /// Forces the latest snapshot to be rendered again after creating or reconfiguring a window.
+    /// Accessed only by the render thread after NativeState initialization.
+    redraw_needed: bool = true,
+
     /// Whether mouse capture is currently active for this window. When true, the OS cursor is
     /// detached from physical mouse motion (via CGAssociateMouseAndMouseCursorPosition(false))
     /// and the application receives `.mouse_motion_relative` events instead of `.mouse_motion`.
@@ -626,9 +634,37 @@ var global_render_loop: ?*RenderLoop = null;
 var global_render_wake: std.Io.Event = .unset;
 var did_set_app_activation_policy: bool = false;
 
-/// Shared render loop for all windows. The render thread waits for the app thread's snapshot
-/// (frame_ready), then waits until any display link has a drawable, applies pending swap chain
-/// updates, and calls Core.renderFrame to render all windows sequentially.
+/// Returns whether a window can consume the latest published snapshot.
+///
+/// Caller must hold core.windows.lockShared.
+pub fn shouldRenderWindow(core: *Core, window_id: mach.ObjectID) bool {
+    const core_window = core.windows.getValue(window_id);
+    const n = core_window.native orelse return false;
+    if (core_window.on_render == null) return false;
+
+    const snapshot_generation = core.snapshot_generation.load(.acquire);
+    if (snapshot_generation == 0) return false;
+    const already_rendered =
+        !n.redraw_needed and n.rendered_snapshot_generation == snapshot_generation;
+    if (already_rendered) return false;
+    if (!@atomicLoad(bool, &n.surface.use_display_link, .acquire)) return true;
+
+    const pending_ptr: *const usize = @ptrCast(&n.surface.pending_drawable);
+    return @atomicLoad(usize, pending_ptr, .acquire) != 0;
+}
+
+/// Records that a window consumed the latest published snapshot.
+///
+/// Caller must hold core.windows.lockShared.
+pub fn didRenderWindow(core: *Core, window_id: mach.ObjectID) void {
+    const n = core.windows.get(window_id, .native) orelse return;
+    n.rendered_snapshot_generation = core.snapshot_generation.load(.acquire);
+    n.redraw_needed = false;
+}
+
+/// Shared render loop for all windows. Snapshot publication, display-link drawables, and swap chain
+/// changes wake the thread through one coalescing event. Each pass renders only windows that can
+/// consume the latest snapshot.
 const RenderLoop = struct {
     core: *Core = undefined,
     core_mod: mach.Mod(Core) = undefined,
@@ -702,40 +738,32 @@ const RenderLoop = struct {
             }
         }
 
-        // The render thread may also be blocked on frame_ready (waiting for the app thread's
-        // snapshot), so wake it / allow it to observe running=false.
-        self.core.frame_ready.set(self.io);
-
         // Wait for render thread to exit.
         self.thread.join();
     }
 
-    /// Returns whether every native window uses a display link and none has a pending drawable.
-    fn shouldWaitForDrawable(rl: *RenderLoop) bool {
+    /// Returns whether the render thread has a swap chain update or a renderable window.
+    fn hasWork(rl: *RenderLoop) bool {
         rl.core.windows.lockShared();
         defer rl.core.windows.unlockShared();
 
-        var found_window = false;
         var windows = rl.core.windows.slice();
         while (windows.next()) |window_id| {
             const n = rl.core.windows.get(window_id, .native) orelse continue;
-            found_window = true;
-            if (!@atomicLoad(bool, &n.surface.use_display_link, .acquire)) return false;
-
-            const pending_ptr: *const usize = @ptrCast(&n.surface.pending_drawable);
-            if (@atomicLoad(usize, pending_ptr, .acquire) != 0) return false;
+            if (n.pending_swap_chain_update != null) return true;
+            if (shouldRenderWindow(rl.core, window_id)) return true;
         }
-        return found_window;
+        return false;
     }
 
-    /// Waits until rendering can proceed without treating a wake as proof that a drawable exists.
-    fn waitForDrawable(rl: *RenderLoop) bool {
+    /// Waits until rendering or swap chain maintenance can proceed. The predicate is checked on
+    /// both sides of reset so concurrent coalesced wakes cannot be lost.
+    fn waitForWork(rl: *RenderLoop) bool {
         while (rl.running.load(.acquire)) {
-            if (!rl.shouldWaitForDrawable()) return true;
+            if (rl.hasWork()) return true;
 
-            // Reset before rechecking the predicate so a concurrent wake cannot be lost.
             global_render_wake.reset();
-            if (!rl.shouldWaitForDrawable()) return true;
+            if (rl.hasWork()) return true;
             global_render_wake.waitUncancelable(rl.io);
         }
         return false;
@@ -744,22 +772,7 @@ const RenderLoop = struct {
     /// Render thread entry point.
     fn renderThreadFn(self: *RenderLoop) void {
         while (self.running.load(.acquire)) {
-            // Wait for the app to signal snapshotEnd() and indicate a frame is ready for drawing.
-            // frame_ready is reset inside Core.renderFrame once render_mu is held and the snapshot
-            // is actually consumed.
-            self.core.frame_ready.waitUncancelable(self.io);
-
-            // If we want to stop the render loop, exit now.
-            if (!self.running.load(.acquire)) break;
-
-            // If every window is display-linked, wait until one has a drawable. Uncapped windows
-            // skip this wait, while display-linked windows without a drawable skip rendering in
-            // getCurrentTextureView.
-            if (!self.waitForDrawable()) break;
-
-            // Now that we waited for vsync, check if we should exit again before rendering the
-            // frame.
-            if (!self.running.load(.acquire)) break;
+            if (!self.waitForWork()) break;
 
             // Apply any pending swap chain updates (resizes, vsync changes) before rendering.
             {
@@ -772,6 +785,7 @@ const RenderLoop = struct {
                     const update = n.pending_swap_chain_update orelse continue;
 
                     n.pending_swap_chain_update = null;
+                    n.redraw_needed = true;
                     core_window.width = update.width;
                     core_window.height = update.height;
                     core_window.framebuffer_width = update.framebuffer_width;
@@ -794,7 +808,7 @@ const RenderLoop = struct {
                 }
             }
 
-            // Render a frame on all windows.
+            // Render only windows that can consume the latest snapshot.
             self.core.renderFrame(self.core_mod, self.io) catch {
                 self.core.oom.store(true, .release);
             };
@@ -849,6 +863,11 @@ pub fn wakeMainThread(_: *Core) void {
         const f = main_tick_fn orelse return;
         dispatch_async_f(&_dispatch_main_q, main_tick_ctx, f);
     }
+}
+
+/// Wakes the shared render thread after publishing a new world snapshot.
+pub fn wakeRenderThread(core: *Core) void {
+    global_render_wake.set(core.io);
 }
 
 /// Application entry point called by Core.main. Sets up the NSApplication delegate and run loop.

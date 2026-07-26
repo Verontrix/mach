@@ -198,6 +198,8 @@ on_exit: ?mach.FunctionID = null,
 /// Current state of the application.
 state: std.atomic.Value(State) = .init(.running),
 
+/// Frequency of render passes containing at least one window. This is not a per-window
+/// presentation rate.
 frame: mach.time.Frequency,
 input: mach.time.Frequency,
 input_periodic_deadline: mach.time.PeriodicDeadline = .{},
@@ -208,11 +210,13 @@ input_periodic_deadline: mach.time.PeriodicDeadline = .{},
 /// swapchain presentation so the app thread can start its next snapshot while it presents.
 render_mu: std.Io.Mutex = .init,
 
-/// Signaled by the app thread in snapshotEnd (while holding render_mu) to indicate a new frame is
-/// ready for the render thread to consume. Reset by the render thread in renderFrame under
-/// render_mu (the point where the snapshot is actually consumed, so a signal cannot outlive its
-/// snapshot and wake the render thread to re-render identical content.)
-frame_ready: std.Io.Event = .unset,
+/// Latest published render snapshot. Incremented by snapshotEnd while holding render_mu. Platform
+/// render loops use this to let independently paced windows consume the latest snapshot once.
+snapshot_generation: std.atomic.Value(u64) = .init(0),
+
+/// Swap chains selected during the current render pass. Each entry is retained while render_mu is
+/// released so the same set can be presented safely even if its window changes concurrently.
+present_swap_chains: std.ArrayList(*gpu.SwapChain) = .empty,
 
 // Internal module state
 allocator: std.mem.Allocator,
@@ -359,16 +363,19 @@ pub fn initWindow(core: *Core, window_id: mach.ObjectID) !void {
 
 /// Render all windows, must be called on the render thread.
 pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
+    std.debug.assert(core.present_swap_chains.items.len == 0);
+    errdefer {
+        for (core.present_swap_chains.items) |swap_chain| swap_chain.release();
+        core.present_swap_chains.clearRetainingCapacity();
+    }
+
+    var shared_device: ?*gpu.Device = null;
+
     // Hold render_mu only during GPU command recording (on_render) so the app thread can start its
     // next snapshot while we present.
     {
         core.render_mu.lockUncancelable(io);
         defer core.render_mu.unlock(io);
-
-        // We now consume the latest snapshot, so clear frame_ready. snapshotEnd sets it while
-        // holding render_mu, so any set not cleared here comes from a snapshot published after
-        // this render and must trigger another frame.
-        core.frame_ready.reset();
 
         core.windows.lockShared();
         defer core.windows.unlockShared();
@@ -377,6 +384,11 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             const core_window = core.windows.getValue(window_id);
             if (core_window.native == null) continue;
             const on_render = core_window.on_render orelse continue;
+            if (!Platform.shouldRenderWindow(core, window_id)) continue;
+
+            try core.present_swap_chains.append(core.allocator, core_window.swap_chain);
+            core_window.swap_chain.reference();
+            shared_device = core_window.device;
 
             // Allow on_render to read the current window being rendered.
             core.window = window_id;
@@ -388,30 +400,25 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
 
             // Ensure nobody reads the window outside on_render.
             core.window = undefined;
+
+            Platform.didRenderWindow(core, window_id);
         }
     }
 
-    // Present all windows and tick the shared device outside render_mu so the app thread can
-    // prepare the next frame during GPU submission.
-    var shared_device: ?*gpu.Device = null;
-    {
-        core.windows.lockShared();
-        defer core.windows.unlockShared();
-        var windows = core.windows.slice();
-        while (windows.next()) |window_id| {
-            const core_window = core.windows.getValue(window_id);
-            if (core_window.native == null) continue;
-
-            shared_device = core_window.device;
-            core_window.swap_chain.present();
-        }
+    // Present only the selected swap chains outside render_mu so the app thread can prepare the
+    // next frame during GPU submission.
+    const rendered = core.present_swap_chains.items.len != 0;
+    for (core.present_swap_chains.items) |swap_chain| {
+        swap_chain.present();
+        swap_chain.release();
     }
+    core.present_swap_chains.clearRetainingCapacity();
 
     // Device tick.
     if (shared_device) |device| mach.sysgpu.Impl.deviceTick(device);
 
-    // Frame rate counter.
-    core.frame.tick();
+    // Global render-pass rate counter.
+    if (rendered) core.frame.tick();
 }
 
 pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
@@ -441,12 +448,9 @@ pub fn snapshotStart(core: *Core, io: std.Io) !void {
 
 /// End submission of a snapshot for rendering the next frame.
 pub fn snapshotEnd(core: *Core, io: std.Io) void {
-    // Set frame_ready while still holding render_mu. The render thread resets it only after
-    // acquiring render_mu in renderFrame, so the mutex orders every set/reset pair: a set either
-    // happens before the reset that consumes this snapshot, or after the render thread releases the
-    // mutex (correctly triggering the next frame).
-    core.frame_ready.set(io);
+    _ = core.snapshot_generation.fetchAdd(1, .release);
     core.render_mu.unlock(io);
+    Platform.wakeRenderThread(core);
 }
 
 /// Sets the window title using a format string. Core owns the resulting allocation and frees it
@@ -576,6 +580,7 @@ pub fn deinit(core: *Core) !void {
     core.render_graph.deinit(core.allocator);
     core.backend_events.deinit(core.allocator);
     core.iter_events.deinit(core.allocator);
+    core.present_swap_chains.deinit(core.allocator);
 }
 
 pub const EventMode = union(enum) {

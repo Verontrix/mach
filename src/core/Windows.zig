@@ -37,6 +37,14 @@ pub fn wakeMainThread(core: *Core) void {
     _ = core;
 }
 
+pub fn wakeRenderThread(_: *Core) void {}
+
+pub fn shouldRenderWindow(_: *Core, _: mach.ObjectID) bool {
+    return true;
+}
+
+pub fn didRenderWindow(_: *Core, _: mach.ObjectID) void {}
+
 pub fn run(comptime on_each_update_fn: anytype, args_tuple: std.meta.ArgsTuple(@TypeOf(on_each_update_fn))) void {
     while (@call(.auto, on_each_update_fn, args_tuple) catch false) {}
 }
