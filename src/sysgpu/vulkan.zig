@@ -1012,7 +1012,7 @@ pub const SwapChain = struct {
         const image_count = blk: {
             const requested = desc.max_buffered_frames;
             const min = capabilities.min_image_count;
-            const max = if (capabilities.max_image_count == 0) requested else capabilities.max_image_count;
+            const max = if (capabilities.max_image_count == 0) std.math.maxInt(u32) else capabilities.max_image_count;
             break :blk std.math.clamp(requested, min, max);
         };
         const format = conv.vulkanFormat(device, desc.format);
