@@ -214,6 +214,13 @@ render_mu: std.Io.Mutex = .init,
 /// render loops use this to let independently paced windows consume the latest snapshot once.
 snapshot_generation: std.atomic.Value(u64) = .init(0),
 
+/// Latest snapshot generation whose first render consumption woke adaptive event pacing.
+/// Accessed by the render thread while holding render_mu.
+consumed_snapshot_generation: u64 = 0,
+
+/// Coalesces render-consumption wakes until the app thread starts its next event-processing tick.
+snapshot_consumed_pending: std.atomic.Value(bool) = .init(false),
+
 /// Swap chains selected during the current render pass. Each entry is retained while render_mu is
 /// released so the same set can be presented safely even if its window changes concurrently.
 present_swap_chains: std.ArrayList(*gpu.SwapChain) = .empty,
@@ -370,12 +377,16 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
     }
 
     var shared_device: ?*gpu.Device = null;
+    var signal_snapshot_consumed = false;
+    errdefer if (signal_snapshot_consumed) core.signalSnapshotConsumed();
 
     // Hold render_mu only during GPU command recording (on_render) so the app thread can start its
     // next snapshot while we present.
     {
         core.render_mu.lockUncancelable(io);
         defer core.render_mu.unlock(io);
+
+        const snapshot_generation = core.snapshot_generation.load(.acquire);
 
         core.windows.lock();
         defer core.windows.unlock();
@@ -405,8 +416,16 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             frame.tick();
             core.windows.setRaw(window_id, .frame, frame);
             Platform.didRenderWindow(core, window_id);
+
+            if (snapshot_generation != 0 and core.consumed_snapshot_generation != snapshot_generation) {
+                core.consumed_snapshot_generation = snapshot_generation;
+                signal_snapshot_consumed = true;
+            }
         }
     }
+
+    // The app thread can begin its next snapshot now that render_mu is available.
+    if (signal_snapshot_consumed) core.signalSnapshotConsumed();
 
     // Present only the selected swap chains outside render_mu so the app thread can prepare the
     // next frame during GPU submission.
@@ -591,11 +610,12 @@ pub const EventMode = union(enum) {
     wait,
     /// Alias for .adaptive_frequency = .{ .min = 120 }
     adaptive,
-    /// Blocks as needed to run at the target minimum frequency, but immediately unblocks if at
-    /// an event is available.
+    /// Blocks as needed to run at the target minimum frequency, but immediately unblocks if
+    /// an event is available or the renderer consumes the latest snapshot.
     ///
     /// Use this to e.g. run your event handling loop at 120hz, but allow the loop to run faster
     /// (e.g. at 1000hz) if the user has a very fast gaming mouse producing events quickly.
+    /// Render-consumption wakes also let the app prepare its next snapshot as soon as possible.
     adaptive_frequency: struct {
         min: u32,
     },
@@ -657,20 +677,40 @@ pub fn events(core: *@This(), mode_arg: EventMode) EventIterator {
         },
         .wait => {
             core.backend_events_mu.lockUncancelable(core.io);
-            if (core.backend_events.items.len == 0) {
-                // No events yet — release the mutex and block until an event is pushed.
+            while (core.backend_events.items.len == 0 and core.state.load(.acquire) == .running) {
+                core.events_ready.reset();
+                if (core.backend_events.items.len != 0 or
+                    core.state.load(.acquire) != .running) break;
+
+                // Snapshot-consumption wakes are exclusive to adaptive pacing.
                 core.backend_events_mu.unlock(core.io);
                 core.events_ready.waitUncancelable(core.io);
                 core.backend_events_mu.lockUncancelable(core.io);
             }
         },
-        .adaptive_frequency => |f| {
-            if (core.input_periodic_deadline.next(core.io, f.min)) |deadline| {
+        .adaptive_frequency => |f| adaptive: {
+            const maybe_deadline = core.input_periodic_deadline.next(core.io, f.min);
+            core.backend_events_mu.lockUncancelable(core.io);
+            const deadline = maybe_deadline orelse break :adaptive;
+
+            while (core.backend_events.items.len == 0 and
+                core.state.load(.acquire) == .running and
+                !core.snapshot_consumed_pending.load(.acquire))
+            {
+                core.events_ready.reset();
+                if (core.backend_events.items.len != 0 or
+                    core.state.load(.acquire) != .running or
+                    core.snapshot_consumed_pending.load(.acquire)) break;
+
+                core.backend_events_mu.unlock(core.io);
                 core.events_ready.waitTimeout(core.io, .{
                     .deadline = deadline,
-                }) catch {};
+                }) catch {
+                    core.backend_events_mu.lockUncancelable(core.io);
+                    break;
+                };
+                core.backend_events_mu.lockUncancelable(core.io);
             }
-            core.backend_events_mu.lockUncancelable(core.io);
         },
         .fixed_frequency => {
             if (core.input.delay_ns > 0) {
@@ -681,9 +721,11 @@ pub fn events(core: *@This(), mode_arg: EventMode) EventIterator {
         .adaptive, .default => unreachable,
     }
 
-    // Reset the event now that we hold the mutex and are about to drain all events.
-    // Any events pushed after this point will re-set it via pushEvent.
+    // Reset wakes and consume any snapshot signal satisfied by this tick. Queued event visibility
+    // is protected by backend_events_mu, and reset/recheck above filters a late stale set. A render
+    // signal racing the atomic swap is either consumed now or remains pending for the next tick.
     core.events_ready.reset();
+    _ = core.snapshot_consumed_pending.swap(false, .acq_rel);
 
     // With the mutex held from above, swap the backend_events (new events) and iter_events (handled events) buffers.
     std.mem.swap(std.ArrayList(Event), &core.backend_events, &core.iter_events);
@@ -720,6 +762,16 @@ pub inline fn pushEvent(core: *@This(), event: Event) void {
     };
     core.backend_events_mu.unlock(core.io);
     core.events_ready.set(core.io);
+}
+
+/// Wakes adaptive event pacing after the renderer consumes a new snapshot.
+fn signalSnapshotConsumed(core: *Core) void {
+    if (core.snapshot_consumed_pending.cmpxchgStrong(
+        false,
+        true,
+        .acq_rel,
+        .acquire,
+    ) == null) core.events_ready.set(core.io);
 }
 
 /// Reports whether mach.Core ran out of memory, indicating events may have been dropped.
@@ -1483,4 +1535,23 @@ test "VSyncMode selects the preferred swap chain image count" {
     try std.testing.expectEqual(2, VSyncMode.adaptive.preferredImageCount());
     try std.testing.expectEqual(2, VSyncMode.none_low_latency.preferredImageCount());
     try std.testing.expectEqual(3, VSyncMode.none_max_throughput.preferredImageCount());
+}
+
+test "snapshot consumption wake coalesces until consumed" {
+    var core: Core = undefined;
+    core.io = std.testing.io;
+    core.events_ready = .unset;
+    core.snapshot_consumed_pending = .init(false);
+
+    core.signalSnapshotConsumed();
+    try std.testing.expect(core.snapshot_consumed_pending.load(.acquire));
+    try std.testing.expect(core.events_ready.isSet());
+
+    core.events_ready.reset();
+    core.signalSnapshotConsumed();
+    try std.testing.expect(!core.events_ready.isSet());
+
+    try std.testing.expect(core.snapshot_consumed_pending.swap(false, .acq_rel));
+    core.signalSnapshotConsumed();
+    try std.testing.expect(core.events_ready.isSet());
 }
