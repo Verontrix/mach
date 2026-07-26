@@ -200,6 +200,7 @@ state: std.atomic.Value(State) = .init(.running),
 
 frame: mach.time.Frequency,
 input: mach.time.Frequency,
+input_periodic_deadline: mach.time.PeriodicDeadline = .{},
 
 /// Mutex protecting the render snapshot itself (e.g. render_graph or snapshotted objects.)
 /// The app thread holds this between snapshotStart and snapshotEnd. The render thread holds
@@ -663,14 +664,10 @@ pub fn events(core: *@This(), mode_arg: EventMode) EventIterator {
                 core.backend_events_mu.lockUncancelable(core.io);
             }
         },
-        .adaptive_frequency => {
-            // Wait until an event arrives OR we've waited for delay_ns, whichever comes first.
-            if (core.input.delay_ns > 0) {
+        .adaptive_frequency => |f| {
+            if (core.input_periodic_deadline.next(core.io, f.min)) |deadline| {
                 core.events_ready.waitTimeout(core.io, .{
-                    .duration = .{
-                        .raw = .{ .nanoseconds = @intCast(core.input.delay_ns) },
-                        .clock = .awake,
-                    },
+                    .deadline = deadline,
                 }) catch {};
             }
             core.backend_events_mu.lockUncancelable(core.io);
