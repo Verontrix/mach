@@ -94,6 +94,16 @@ const MACHWindowDelegate = objc.objc.DefineClass(struct {
             handleResize(state(self));
         }
 
+        /// Begins the live-resize transition before AppKit notifies the view hierarchy.
+        pub fn @"windowWillStartLiveResize:"(self: *Self, _: ?*objc.app_kit.Notification) void {
+            beginLiveResize(state(self));
+        }
+
+        /// Restores regular presentation after live resize finishes.
+        pub fn @"windowDidEndLiveResize:"(self: *Self, _: ?*objc.app_kit.Notification) void {
+            endLiveResize(state(self));
+        }
+
         /// Called by AppKit when the window's backing scale factor changes (e.g. when the
         /// window is dragged between displays of different DPI). In this case the framebuffer
         /// size has changed so we need to consider it as a potential resize event.
@@ -255,18 +265,6 @@ const MACHView = objc.objc.DefineClass(struct {
         /// change which requested this display pass.
         pub fn @"displayLayer:"(self: *Self, _: ?*objc.quartz_core.Layer) void {
             displayTransactionFrame(state(self));
-        }
-
-        pub fn viewWillStartLiveResize(self: *Self) void {
-            const super = objc.objc.superFn(objc.app_kit.View, "viewWillStartLiveResize", fn (*Self) void);
-            super(self);
-            beginLiveResize(state(self));
-        }
-
-        pub fn viewDidEndLiveResize(self: *Self) void {
-            endLiveResize(state(self));
-            const super = objc.objc.superFn(objc.app_kit.View, "viewDidEndLiveResize", fn (*Self) void);
-            super(self);
         }
 
         pub fn acceptsFirstResponder(_: *Self) bool {
@@ -685,22 +683,9 @@ fn discardPendingTransactionDrawable(n: *NativeState) void {
 }
 
 fn beginLiveResize(n: *NativeState) void {
-    const rl = global_render_loop orelse return;
-    rl.render_pass_mu.lockUncancelable(n.io);
-
-    if (n.live_resize.load(.acquire)) {
-        rl.render_pass_mu.unlock(n.io);
-        return;
-    }
-    if (@atomicLoad(bool, &n.surface.use_display_link, .acquire)) RenderLoop.detachDisplayLink(n);
-
-    discardPendingTransactionDrawable(n);
+    _ = global_render_loop orelse return;
+    if (n.live_resize.swap(true, .acq_rel)) return;
     @atomicStore(bool, &n.surface.use_transaction_drawable, true, .release);
-    n.surface.layer.setAllowsNextDrawableTimeout(false);
-    n.surface.layer.setPresentsWithTransaction(true);
-    n.live_resize.store(true, .release);
-    rl.render_pass_mu.unlock(n.io);
-    objc.objc.msgSend(n.surface.layer, "setNeedsDisplay", void, .{});
 }
 
 fn endLiveResize(n: *NativeState) void {
@@ -716,14 +701,17 @@ fn endLiveResize(n: *NativeState) void {
 
     n.live_resize.store(false, .release);
     @atomicStore(bool, &n.surface.use_transaction_drawable, false, .release);
-    n.surface.layer.setPresentsWithTransaction(false);
-    n.surface.layer.setAllowsNextDrawableTimeout(true);
+    if (n.surface.layer.presentsWithTransaction()) {
+        n.surface.layer.setPresentsWithTransaction(false);
+        n.surface.layer.setAllowsNextDrawableTimeout(true);
+    }
     n.redraw_needed = true;
 
     n.core.windows.lockShared();
     const vsync_mode = n.core.windows.get(n.window_id, .vsync_mode);
     n.core.windows.unlockShared();
-    if (!vsync_mode.isNone()) RenderLoop.attachDisplayLink(n, vsync_mode.preferredImageCount());
+    const has_display_link = @atomicLoad(bool, &n.surface.use_display_link, .acquire);
+    if (!vsync_mode.isNone() and !has_display_link) RenderLoop.attachDisplayLink(n, vsync_mode.preferredImageCount());
 
     global_render_wake.set(n.io);
 }
@@ -735,6 +723,12 @@ fn displayTransactionFrame(n: *NativeState) void {
     if (!rl.running.load(.acquire)) return;
 
     rl.render_pass_mu.lockUncancelable(n.io);
+    if (!n.surface.layer.presentsWithTransaction()) {
+        if (@atomicLoad(bool, &n.surface.use_display_link, .acquire)) RenderLoop.detachDisplayLink(n);
+        discardPendingTransactionDrawable(n);
+        n.surface.layer.setAllowsNextDrawableTimeout(false);
+        n.surface.layer.setPresentsWithTransaction(true);
+    }
     handleResize(n);
 
     const drawable = n.surface.layer.nextDrawable() orelse {
@@ -1007,19 +1001,30 @@ const RenderLoop = struct {
                     core_window.framebuffer_width = update.framebuffer_width;
                     core_window.framebuffer_height = update.framebuffer_height;
                     core_window.pixel_density = update.pixel_density;
-                    core_window.swap_chain_descriptor.width = update.framebuffer_width;
-                    core_window.swap_chain_descriptor.height = update.framebuffer_height;
-                    core_window.swap_chain_descriptor.present_mode = switch (update.vsync_mode) {
+                    const desc = &core_window.swap_chain_descriptor;
+                    const old_present_mode = desc.present_mode;
+                    const old_preferred_image_count = desc.preferred_image_count;
+                    desc.width = update.framebuffer_width;
+                    desc.height = update.framebuffer_height;
+                    desc.present_mode = switch (update.vsync_mode) {
                         .none_low_latency, .none_max_throughput => .immediate,
                         .double, .adaptive, .low_latency => .fifo,
                         .triple => .fifo,
                     };
-                    core_window.swap_chain_descriptor.preferred_image_count = update.vsync_mode.preferredImageCount();
-                    core_window.swap_chain.release();
-                    core_window.swap_chain = core_window.device.createSwapChain(
-                        core_window.surface,
-                        &core_window.swap_chain_descriptor,
-                    );
+                    desc.preferred_image_count = update.vsync_mode.preferredImageCount();
+                    const image_count_changed =
+                        desc.present_mode != .immediate and
+                        old_preferred_image_count != desc.preferred_image_count;
+                    const presentation_changed =
+                        old_present_mode != desc.present_mode or
+                        image_count_changed;
+                    if (!n.live_resize.load(.acquire) or presentation_changed) {
+                        core_window.swap_chain.release();
+                        core_window.swap_chain = core_window.device.createSwapChain(
+                            core_window.surface,
+                            desc,
+                        );
+                    }
                     self.core.windows.setValueRaw(window_id, core_window);
                 }
             }
