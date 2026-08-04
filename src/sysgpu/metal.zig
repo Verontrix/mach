@@ -467,9 +467,7 @@ pub const SwapChain = struct {
         const display_link_active = @atomicLoad(bool, &surface.use_display_link, .acquire);
 
         if (display_link_active) {
-            // Display link provides external vsync pacing; disable the layer's own vsync sync so
-            // present() doesn't block per-window.
-            layer.setDisplaySyncEnabled(false);
+            layer.setDisplaySyncEnabled(true);
         } else {
             const drawable_count = if (desc.present_mode == .immediate) 2 else std.math.clamp(desc.preferred_image_count, 2, 3);
             if (layer.maximumDrawableCount() != drawable_count) {

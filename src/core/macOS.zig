@@ -857,9 +857,9 @@ const RenderLoop = struct {
         // render thread could race in between.
         @atomicStore(bool, &n.surface.use_display_link, true, .release);
 
-        // The display link provides external vsync pacing, so disable the layer's own
-        // displaySyncEnabled to prevent present() from blocking a second time.
-        n.surface.layer.setDisplaySyncEnabled(false);
+        // Keep the layer synchronized as well as using CAMetalDisplayLink. The display link
+        // supplies pacing and deadlines; displaySyncEnabled controls compositor presentation.
+        n.surface.layer.setDisplaySyncEnabled(true);
 
         // Start the display link.
         if (!n.view.call(.startDisplayLink, .{})) {
