@@ -118,6 +118,11 @@ fn handleResize(n: *NativeState) void {
     const fb_width: u32 = @intFromFloat(@as(f32, @floatFromInt(width)) * pixel_density);
     const fb_height: u32 = @intFromFloat(@as(f32, @floatFromInt(height)) * pixel_density);
 
+    if (n.live_resize.load(.acquire)) n.surface.layer.setDrawableSize(.{
+        .width = @floatFromInt(fb_width),
+        .height = @floatFromInt(fb_height),
+    });
+
     if (core_window.width == width and
         core_window.height == height and
         core_window.pixel_density == pixel_density) return;
@@ -138,7 +143,7 @@ fn handleResize(n: *NativeState) void {
         .pixel_density = pixel_density,
         .vsync_mode = core_window.vsync_mode,
     };
-    global_render_wake.set(n.io);
+    if (!n.live_resize.load(.acquire)) global_render_wake.set(n.io);
 
     n.core.pushEvent(.{ .resize = .{
         .window_id = n.window_id,
@@ -562,7 +567,7 @@ const NativeState = struct {
     /// Coordinates one synchronous displayLayer request with the shared render thread.
     transaction_frame_state: std.atomic.Value(TransactionFrameState) = .init(.idle),
     transaction_frame_ready: std.Io.Event = .unset,
-    transaction_drawable: std.atomic.Value(usize) = .init(0),
+    transaction_present_drawable: std.atomic.Value(usize) = .init(0),
 
     /// Whether mouse capture is currently active for this window. When true, the OS cursor is
     /// detached from physical mouse motion (via CGAssociateMouseAndMouseCursorPosition(false))
@@ -670,6 +675,15 @@ var global_render_loop: ?*RenderLoop = null;
 var global_render_wake: std.Io.Event = .unset;
 var did_set_app_activation_policy: bool = false;
 
+fn discardPendingTransactionDrawable(n: *NativeState) void {
+    const pending_ptr: *usize = @ptrCast(&n.surface.pending_transaction_drawable);
+    const drawable_ptr = @atomicRmw(usize, pending_ptr, .Xchg, 0, .acq_rel);
+    if (drawable_ptr != 0) {
+        const drawable: *objc.quartz_core.MetalDrawable = @ptrFromInt(drawable_ptr);
+        drawable.release();
+    }
+}
+
 fn beginLiveResize(n: *NativeState) void {
     const rl = global_render_loop orelse return;
     rl.render_pass_mu.lockUncancelable(n.io);
@@ -680,6 +694,8 @@ fn beginLiveResize(n: *NativeState) void {
     }
     if (@atomicLoad(bool, &n.surface.use_display_link, .acquire)) RenderLoop.detachDisplayLink(n);
 
+    discardPendingTransactionDrawable(n);
+    @atomicStore(bool, &n.surface.use_transaction_drawable, true, .release);
     n.surface.layer.setAllowsNextDrawableTimeout(false);
     n.surface.layer.setPresentsWithTransaction(true);
     n.live_resize.store(true, .release);
@@ -694,9 +710,12 @@ fn endLiveResize(n: *NativeState) void {
 
     if (!n.live_resize.load(.acquire)) return;
     std.debug.assert(n.transaction_frame_state.load(.acquire) == .idle);
-    std.debug.assert(n.transaction_drawable.load(.acquire) == 0);
+    std.debug.assert(n.transaction_present_drawable.load(.acquire) == 0);
+    const pending_ptr: *const usize = @ptrCast(&n.surface.pending_transaction_drawable);
+    std.debug.assert(@atomicLoad(usize, pending_ptr, .acquire) == 0);
 
     n.live_resize.store(false, .release);
+    @atomicStore(bool, &n.surface.use_transaction_drawable, false, .release);
     n.surface.layer.setPresentsWithTransaction(false);
     n.surface.layer.setAllowsNextDrawableTimeout(true);
     n.redraw_needed = true;
@@ -715,28 +734,42 @@ fn displayTransactionFrame(n: *NativeState) void {
     const rl = global_render_loop orelse return;
     if (!rl.running.load(.acquire)) return;
 
+    rl.render_pass_mu.lockUncancelable(n.io);
     handleResize(n);
+
+    const drawable = n.surface.layer.nextDrawable() orelse {
+        rl.render_pass_mu.unlock(n.io);
+        return;
+    };
+    _ = drawable.retain();
+
     n.transaction_frame_ready.reset();
+    const pending_ptr: *usize = @ptrCast(&n.surface.pending_transaction_drawable);
+    const previous = @atomicRmw(usize, pending_ptr, .Xchg, @intFromPtr(drawable), .acq_rel);
+    std.debug.assert(previous == 0);
     if (n.transaction_frame_state.cmpxchgStrong(
         .idle,
         .requested,
         .acq_rel,
         .acquire,
     ) != null) {
+        discardPendingTransactionDrawable(n);
+        rl.render_pass_mu.unlock(n.io);
         log.err("overlapping Core Animation display requests during live resize", .{});
         return;
     }
+    rl.render_pass_mu.unlock(n.io);
 
     global_render_wake.set(n.io);
     n.transaction_frame_ready.waitUncancelable(n.io);
     std.debug.assert(n.transaction_frame_state.load(.acquire) == .ready);
 
-    const drawable_ptr = n.transaction_drawable.swap(0, .acq_rel);
+    const drawable_ptr = n.transaction_present_drawable.swap(0, .acq_rel);
     if (drawable_ptr != 0) {
-        const drawable: *objc.quartz_core.MetalDrawable = @ptrFromInt(drawable_ptr);
-        const mtl_drawable: *objc.metal.Drawable = @ptrCast(drawable);
+        const present_drawable: *objc.quartz_core.MetalDrawable = @ptrFromInt(drawable_ptr);
+        const mtl_drawable: *objc.metal.Drawable = @ptrCast(present_drawable);
         mtl_drawable.present();
-        drawable.release();
+        present_drawable.release();
     }
     n.transaction_frame_state.store(.idle, .release);
 }
@@ -794,9 +827,10 @@ pub fn presentSwapChain(
         break :blk null;
     };
     if (drawable) |d| {
-        const previous = n.transaction_drawable.swap(@intFromPtr(d), .acq_rel);
+        const previous = n.transaction_present_drawable.swap(@intFromPtr(d), .acq_rel);
         std.debug.assert(previous == 0);
     }
+    discardPendingTransactionDrawable(n);
     n.transaction_frame_state.store(.ready, .release);
     n.transaction_frame_ready.set(io);
 }
@@ -929,7 +963,10 @@ const RenderLoop = struct {
                 .ready,
                 .acq_rel,
                 .acquire,
-            ) == null) n.transaction_frame_ready.set(rl.io);
+            ) == null) {
+                discardPendingTransactionDrawable(n);
+                n.transaction_frame_ready.set(rl.io);
+            }
         }
     }
 

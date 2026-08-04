@@ -137,6 +137,10 @@ pub const Surface = struct {
     use_display_link: bool,
     /// Drawable provided by the CAMetalDisplayLink callback; consumed by the swap chain.
     pending_drawable: ?*ca.MetalDrawable,
+    /// When true, the AppKit thread provides the drawable used for transaction presentation.
+    use_transaction_drawable: bool,
+    /// Drawable acquired by the AppKit thread for the current transaction render.
+    pending_transaction_drawable: ?*ca.MetalDrawable,
 
     pub fn init(instance: *Instance, desc: *const sysgpu.Surface.Descriptor) !*Surface {
         _ = instance;
@@ -147,6 +151,8 @@ pub const Surface = struct {
                 .layer = @ptrCast(mtl_desc.layer),
                 .use_display_link = false,
                 .pending_drawable = null,
+                .use_transaction_drawable = false,
+                .pending_transaction_drawable = null,
             };
             return surface;
         } else {
@@ -155,6 +161,8 @@ pub const Surface = struct {
     }
 
     pub fn deinit(surface: *Surface) void {
+        if (surface.pending_drawable) |drawable| drawable.release();
+        if (surface.pending_transaction_drawable) |drawable| drawable.release();
         allocator.destroy(surface);
     }
 };
@@ -489,10 +497,19 @@ pub const SwapChain = struct {
 
         if (swapchain.current_drawable) |drawable| drawable.release();
 
-        // Check the live flag: when a CAMetalDisplayLink is attached, Metal forbids calling nextDrawable() on the layer.
+        // Externally paced paths provide their drawable rather than acquiring one here.
+        const use_transaction_drawable = @atomicLoad(
+            bool,
+            &swapchain.surface.use_transaction_drawable,
+            .acquire,
+        );
         const use_display_link = @atomicLoad(bool, &swapchain.surface.use_display_link, .acquire);
 
-        if (use_display_link) {
+        if (use_transaction_drawable) {
+            const pending_ptr: *usize = @ptrCast(&swapchain.surface.pending_transaction_drawable);
+            const pending = @atomicRmw(usize, pending_ptr, .Xchg, 0, .acq_rel);
+            swapchain.current_drawable = if (pending != 0) @ptrFromInt(pending) else null;
+        } else if (use_display_link) {
             // Consume the drawable provided by the display link callback.
             const pending_ptr: *usize = @ptrCast(&swapchain.surface.pending_drawable);
             const pending = @atomicRmw(usize, pending_ptr, .Xchg, 0, .acq_rel);
@@ -505,9 +522,9 @@ pub const SwapChain = struct {
         swapchain.device.processQueuedOperations();
 
         if (swapchain.current_drawable) |drawable| {
-            // Display link drawables are already retained by displayLinkWake; nextDrawable()
+            // Externally provided drawables are already retained by their producer. nextDrawable()
             // returns autoreleased objects that need a retain.
-            if (!use_display_link) {
+            if (!use_transaction_drawable and !use_display_link) {
                 _ = drawable.retain();
             }
             return TextureView.initFromMtlTexture(drawable.texture());
