@@ -1421,6 +1421,7 @@ fn initWindow(
     n.view = MACHView.alloc().call(.initWithFrame, .{rect}).?;
     MACHView.implementation._state.set(n.view, n);
     n.view.as(objc.app_kit.View).setLayer(@ptrCast(layer));
+    n.view.as(objc.app_kit.View).setWantsLayer(true);
     objc.objc.msgSend(layer, "setDelegate:", void, .{n.view});
     objc.objc.msgSend(layer, "setNeedsDisplayOnBoundsChange:", void, .{true});
     n.window.setContentView(@ptrCast(n.view));
