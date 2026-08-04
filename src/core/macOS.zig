@@ -63,48 +63,6 @@ const MACHWindowDelegate = objc.objc.DefineClass(struct {
         return @ptrCast(@alignCast(implementation._state.get(d).?));
     }
 
-    /// Handles a potential window resize, framebuffer resize, or DPI change. Called from the
-    /// windowDidResize and windowDidChangeBackingProperties IMPs.
-    fn handleResize(n: *NativeState) void {
-        n.core.windows.lock();
-        defer n.core.windows.unlock();
-
-        const core_window = n.core.windows.getValue(n.window_id);
-
-        // Determine the current width / height / pixel density of the window.
-        const frame = n.window.frame();
-        const content_rect = n.window.contentRectForFrameRect(frame);
-        const width: u32 = @intFromFloat(content_rect.size.width);
-        const height: u32 = @intFromFloat(content_rect.size.height);
-        const pixel_density: f32 = @floatCast(n.window.backingScaleFactor());
-
-        // Skip the work if nothing actually changed (handleResize can be called for many reasons.)
-        if (core_window.width == width and
-            core_window.height == height and
-            core_window.pixel_density == pixel_density) return;
-
-        const fb_width: u32 = @intFromFloat(@as(f32, @floatFromInt(width)) * pixel_density);
-        const fb_height: u32 = @intFromFloat(@as(f32, @floatFromInt(height)) * pixel_density);
-
-        // Queue a swap chain recreation for the render thread.
-        n.pending_swap_chain_update = .{
-            .width = width,
-            .height = height,
-            .framebuffer_width = fb_width,
-            .framebuffer_height = fb_height,
-            .pixel_density = pixel_density,
-            .vsync_mode = core_window.vsync_mode,
-        };
-        global_render_wake.set(n.io);
-
-        n.core.pushEvent(.{ .resize = .{
-            .window_id = n.window_id,
-            .window_size = .{ .width = width, .height = height },
-            .framebuffer_size = .{ .width = fb_width, .height = fb_height },
-            .pixel_density = pixel_density,
-        } });
-    }
-
     pub const methods = struct {
         /// Called by AppKit when the user clicks the window's close button.
         pub fn @"windowShouldClose:"(self: *Self, _: ?*objc.app_kit.Window) bool {
@@ -144,6 +102,51 @@ const MACHWindowDelegate = objc.objc.DefineClass(struct {
         }
     };
 });
+
+/// Handles a potential window resize, framebuffer resize, or DPI change.
+fn handleResize(n: *NativeState) void {
+    n.core.windows.lock();
+    defer n.core.windows.unlock();
+
+    const core_window = n.core.windows.getValue(n.window_id);
+
+    const frame = n.window.frame();
+    const content_rect = n.window.contentRectForFrameRect(frame);
+    const width: u32 = @intFromFloat(content_rect.size.width);
+    const height: u32 = @intFromFloat(content_rect.size.height);
+    const pixel_density: f32 = @floatCast(n.window.backingScaleFactor());
+    const fb_width: u32 = @intFromFloat(@as(f32, @floatFromInt(width)) * pixel_density);
+    const fb_height: u32 = @intFromFloat(@as(f32, @floatFromInt(height)) * pixel_density);
+
+    if (core_window.width == width and
+        core_window.height == height and
+        core_window.pixel_density == pixel_density) return;
+
+    if (n.pending_swap_chain_update) |pending| {
+        if (pending.width == width and
+            pending.height == height and
+            pending.framebuffer_width == fb_width and
+            pending.framebuffer_height == fb_height and
+            pending.pixel_density == pixel_density) return;
+    }
+
+    n.pending_swap_chain_update = .{
+        .width = width,
+        .height = height,
+        .framebuffer_width = fb_width,
+        .framebuffer_height = fb_height,
+        .pixel_density = pixel_density,
+        .vsync_mode = core_window.vsync_mode,
+    };
+    global_render_wake.set(n.io);
+
+    n.core.pushEvent(.{ .resize = .{
+        .window_id = n.window_id,
+        .window_size = .{ .width = width, .height = height },
+        .framebuffer_size = .{ .width = fb_width, .height = fb_height },
+        .pixel_density = pixel_density,
+    } });
+}
 
 /// NSView subclass implementing CAMetalDisplayLinkDelegate.
 const MACHView = objc.objc.DefineClass(struct {
@@ -241,6 +244,24 @@ const MACHView = objc.objc.DefineClass(struct {
 
         pub fn canBecomeKeyView(_: *Self) bool {
             return true;
+        }
+
+        /// Renders and presents a resized drawable before Core Animation commits the bounds
+        /// change which requested this display pass.
+        pub fn @"displayLayer:"(self: *Self, _: ?*objc.quartz_core.Layer) void {
+            displayTransactionFrame(state(self));
+        }
+
+        pub fn viewWillStartLiveResize(self: *Self) void {
+            const super = objc.objc.superFn(objc.app_kit.View, "viewWillStartLiveResize", fn (*Self) void);
+            super(self);
+            beginLiveResize(state(self));
+        }
+
+        pub fn viewDidEndLiveResize(self: *Self) void {
+            endLiveResize(state(self));
+            const super = objc.objc.superFn(objc.app_kit.View, "viewDidEndLiveResize", fn (*Self) void);
+            super(self);
         }
 
         pub fn acceptsFirstResponder(_: *Self) bool {
@@ -499,6 +520,13 @@ const PendingSwapChainUpdate = struct {
     vsync_mode: Core.VSyncMode,
 };
 
+const TransactionFrameState = enum(u8) {
+    idle,
+    requested,
+    rendering,
+    ready,
+};
+
 /// Core.windows '.native' field, i.e. per-window platform state.
 /// We use a heap-allocated pointer here so that we can pass a stable address through various ObjC
 /// classes as context.
@@ -527,6 +555,14 @@ const NativeState = struct {
     /// Forces the latest snapshot to be rendered again after creating or reconfiguring a window.
     /// Accessed only by the render thread after NativeState initialization.
     redraw_needed: bool = true,
+
+    /// Whether interactive resizing is using Core Animation transaction presentation.
+    live_resize: std.atomic.Value(bool) = .init(false),
+
+    /// Coordinates one synchronous displayLayer request with the shared render thread.
+    transaction_frame_state: std.atomic.Value(TransactionFrameState) = .init(.idle),
+    transaction_frame_ready: std.Io.Event = .unset,
+    transaction_drawable: std.atomic.Value(usize) = .init(0),
 
     /// Whether mouse capture is currently active for this window. When true, the OS cursor is
     /// detached from physical mouse motion (via CGAssociateMouseAndMouseCursorPosition(false))
@@ -634,6 +670,77 @@ var global_render_loop: ?*RenderLoop = null;
 var global_render_wake: std.Io.Event = .unset;
 var did_set_app_activation_policy: bool = false;
 
+fn beginLiveResize(n: *NativeState) void {
+    const rl = global_render_loop orelse return;
+    rl.render_pass_mu.lockUncancelable(n.io);
+
+    if (n.live_resize.load(.acquire)) {
+        rl.render_pass_mu.unlock(n.io);
+        return;
+    }
+    if (@atomicLoad(bool, &n.surface.use_display_link, .acquire)) RenderLoop.detachDisplayLink(n);
+
+    n.surface.layer.setAllowsNextDrawableTimeout(false);
+    n.surface.layer.setPresentsWithTransaction(true);
+    n.live_resize.store(true, .release);
+    rl.render_pass_mu.unlock(n.io);
+    objc.objc.msgSend(n.surface.layer, "setNeedsDisplay", void, .{});
+}
+
+fn endLiveResize(n: *NativeState) void {
+    const rl = global_render_loop orelse return;
+    rl.render_pass_mu.lockUncancelable(n.io);
+    defer rl.render_pass_mu.unlock(n.io);
+
+    if (!n.live_resize.load(.acquire)) return;
+    std.debug.assert(n.transaction_frame_state.load(.acquire) == .idle);
+    std.debug.assert(n.transaction_drawable.load(.acquire) == 0);
+
+    n.live_resize.store(false, .release);
+    n.surface.layer.setPresentsWithTransaction(false);
+    n.surface.layer.setAllowsNextDrawableTimeout(true);
+    n.redraw_needed = true;
+
+    n.core.windows.lockShared();
+    const vsync_mode = n.core.windows.get(n.window_id, .vsync_mode);
+    n.core.windows.unlockShared();
+    if (!vsync_mode.isNone()) RenderLoop.attachDisplayLink(n, vsync_mode.preferredImageCount());
+
+    global_render_wake.set(n.io);
+}
+
+fn displayTransactionFrame(n: *NativeState) void {
+    if (!n.live_resize.load(.acquire)) return;
+    if (n.core.state.load(.acquire) != .running) return;
+    const rl = global_render_loop orelse return;
+    if (!rl.running.load(.acquire)) return;
+
+    handleResize(n);
+    n.transaction_frame_ready.reset();
+    if (n.transaction_frame_state.cmpxchgStrong(
+        .idle,
+        .requested,
+        .acq_rel,
+        .acquire,
+    ) != null) {
+        log.err("overlapping Core Animation display requests during live resize", .{});
+        return;
+    }
+
+    global_render_wake.set(n.io);
+    n.transaction_frame_ready.waitUncancelable(n.io);
+    std.debug.assert(n.transaction_frame_state.load(.acquire) == .ready);
+
+    const drawable_ptr = n.transaction_drawable.swap(0, .acq_rel);
+    if (drawable_ptr != 0) {
+        const drawable: *objc.quartz_core.MetalDrawable = @ptrFromInt(drawable_ptr);
+        const mtl_drawable: *objc.metal.Drawable = @ptrCast(drawable);
+        mtl_drawable.present();
+        drawable.release();
+    }
+    n.transaction_frame_state.store(.idle, .release);
+}
+
 /// Returns whether a window can consume the latest published snapshot.
 ///
 /// Caller must hold core.windows.lock or core.windows.lockShared.
@@ -644,6 +751,7 @@ pub fn shouldRenderWindow(core: *Core, window_id: mach.ObjectID) bool {
 
     const snapshot_generation = core.snapshot_generation.load(.acquire);
     if (snapshot_generation == 0) return false;
+    if (n.live_resize.load(.acquire)) return n.transaction_frame_state.load(.acquire) == .rendering;
     const already_rendered =
         !n.redraw_needed and n.rendered_snapshot_generation == snapshot_generation;
     if (already_rendered) return false;
@@ -662,6 +770,37 @@ pub fn didRenderWindow(core: *Core, window_id: mach.ObjectID) void {
     n.redraw_needed = false;
 }
 
+pub fn presentSwapChain(
+    core: *Core,
+    window_id: mach.ObjectID,
+    swap_chain: *gpu.SwapChain,
+    io: std.Io,
+) void {
+    core.windows.lockShared();
+    defer core.windows.unlockShared();
+
+    const n = core.windows.get(window_id, .native) orelse {
+        swap_chain.present();
+        return;
+    };
+    if (!n.live_resize.load(.acquire) or n.transaction_frame_state.load(.acquire) != .rendering) {
+        swap_chain.present();
+        return;
+    }
+
+    const metal_swap_chain: *metal.SwapChain = @ptrCast(@alignCast(swap_chain));
+    const drawable = metal_swap_chain.prepareTransactionPresent() catch |err| blk: {
+        log.err("preparing live-resize presentation failed: {s}", .{@errorName(err)});
+        break :blk null;
+    };
+    if (drawable) |d| {
+        const previous = n.transaction_drawable.swap(@intFromPtr(d), .acq_rel);
+        std.debug.assert(previous == 0);
+    }
+    n.transaction_frame_state.store(.ready, .release);
+    n.transaction_frame_ready.set(io);
+}
+
 /// Shared render loop for all windows. Snapshot publication, display-link drawables, and swap chain
 /// changes wake the thread through one coalescing event. Each pass renders only windows that can
 /// consume the latest snapshot.
@@ -670,6 +809,8 @@ const RenderLoop = struct {
     core_mod: mach.Mod(Core) = undefined,
     io: std.Io = undefined,
     running: std.atomic.Value(bool) = .init(true),
+    /// Serializes render passes with presentation-mode transitions on the AppKit thread.
+    render_pass_mu: std.Io.Mutex = .init,
     thread: std.Thread = undefined,
 
     /// Spawns the render thread.
@@ -751,9 +892,45 @@ const RenderLoop = struct {
         while (windows.next()) |window_id| {
             const n = rl.core.windows.get(window_id, .native) orelse continue;
             if (n.pending_swap_chain_update != null) return true;
+            if (n.transaction_frame_state.load(.acquire) == .requested) return true;
             if (shouldRenderWindow(rl.core, window_id)) return true;
         }
         return false;
+    }
+
+    /// Claims live-resize display requests for this render pass.
+    fn claimTransactionFrames(rl: *RenderLoop) void {
+        rl.core.windows.lockShared();
+        defer rl.core.windows.unlockShared();
+
+        var windows = rl.core.windows.slice();
+        while (windows.next()) |window_id| {
+            const n = rl.core.windows.get(window_id, .native) orelse continue;
+            if (!n.live_resize.load(.acquire)) continue;
+            _ = n.transaction_frame_state.cmpxchgStrong(
+                .requested,
+                .rendering,
+                .acq_rel,
+                .acquire,
+            );
+        }
+    }
+
+    /// Completes claimed requests for windows which could not produce a drawable.
+    fn finishTransactionFrames(rl: *RenderLoop) void {
+        rl.core.windows.lockShared();
+        defer rl.core.windows.unlockShared();
+
+        var windows = rl.core.windows.slice();
+        while (windows.next()) |window_id| {
+            const n = rl.core.windows.get(window_id, .native) orelse continue;
+            if (n.transaction_frame_state.cmpxchgStrong(
+                .rendering,
+                .ready,
+                .acq_rel,
+                .acquire,
+            ) == null) n.transaction_frame_ready.set(rl.io);
+        }
     }
 
     /// Waits until rendering or swap chain maintenance can proceed. The predicate is checked on
@@ -773,6 +950,8 @@ const RenderLoop = struct {
     fn renderThreadFn(self: *RenderLoop) void {
         while (self.running.load(.acquire)) {
             if (!self.waitForWork()) break;
+
+            self.render_pass_mu.lockUncancelable(self.io);
 
             // Apply any pending swap chain updates (resizes, vsync changes) before rendering.
             {
@@ -808,10 +987,14 @@ const RenderLoop = struct {
                 }
             }
 
+            self.claimTransactionFrames();
+
             // Render only windows that can consume the latest snapshot.
             self.core.renderFrame(self.core_mod, self.io) catch {
                 self.core.oom.store(true, .release);
             };
+            self.finishTransactionFrames();
+            self.render_pass_mu.unlock(self.io);
         }
     }
 };
@@ -923,6 +1106,7 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
         if (@atomicLoad(bool, &n.surface.use_display_link, .acquire)) {
             RenderLoop.detachDisplayLink(n);
         }
+        objc.objc.msgSend(n.surface.layer, "setDelegate:", void, .{@as(?*anyopaque, null)});
         global_render_wake.set(n.io);
         n.window.setIsVisible(false);
         n.view.release();
@@ -1032,11 +1216,14 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             try ensureRenderLoop(core, core_mod, io);
             const want_vsync = !core_window.vsync_mode.isNone();
 
-            // CAMetalLayer drawable count must be configured before attaching CAMetalDisplayLink.
-            const have_display_link = @atomicLoad(bool, &n.surface.use_display_link, .acquire);
-            if (have_display_link) RenderLoop.detachDisplayLink(n);
-            if (want_vsync) {
-                RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
+            if (!n.live_resize.load(.acquire)) {
+                // CAMetalLayer drawable count must be configured before attaching
+                // CAMetalDisplayLink.
+                const have_display_link = @atomicLoad(bool, &n.surface.use_display_link, .acquire);
+                if (have_display_link) RenderLoop.detachDisplayLink(n);
+                if (want_vsync) {
+                    RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
+                }
             }
 
             // Queue a swap chain recreation for the render thread.
@@ -1195,8 +1382,10 @@ fn initWindow(
     // initWithFrame is overridden in our MACHView, which creates a tracking area for mouse
     // tracking
     n.view = MACHView.alloc().call(.initWithFrame, .{rect}).?;
-    n.view.as(objc.app_kit.View).setLayer(@ptrCast(layer));
     MACHView.implementation._state.set(n.view, n);
+    n.view.as(objc.app_kit.View).setLayer(@ptrCast(layer));
+    objc.objc.msgSend(layer, "setDelegate:", void, .{n.view});
+    objc.objc.msgSend(layer, "setNeedsDisplayOnBoundsChange:", void, .{true});
     n.window.setContentView(@ptrCast(n.view));
 
     // Center the window

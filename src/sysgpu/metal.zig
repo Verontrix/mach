@@ -539,6 +539,25 @@ pub const SwapChain = struct {
             command_buffer.commit();
         }
     }
+
+    /// Schedules all rendering submitted before this call and transfers the acquired drawable to
+    /// the caller for presentation in the current Core Animation transaction.
+    pub fn prepareTransactionPresent(swapchain: *SwapChain) !?*ca.MetalDrawable {
+        const pool = objc.autoreleasePoolPush();
+        defer objc.autoreleasePoolPop(pool);
+
+        const drawable = swapchain.current_drawable orelse return null;
+        swapchain.current_drawable = null;
+        errdefer drawable.release();
+
+        const queue = try swapchain.device.getQueue();
+        const command_buffer = queue.command_queue.commandBuffer() orelse {
+            return error.NewCommandBufferFailed;
+        };
+        command_buffer.commit();
+        command_buffer.waitUntilScheduled();
+        return drawable;
+    }
 };
 
 pub const Buffer = struct {

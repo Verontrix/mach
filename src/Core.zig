@@ -62,6 +62,11 @@ pub const mach_systems = .{
     .deinit,
 };
 
+const PendingPresent = struct {
+    window_id: mach.ObjectID,
+    swap_chain: *gpu.SwapChain,
+};
+
 /// Window objects managed by the platform.
 windows: mach.Objects(
     // Set track_fields to true so that when these field values change, we know about it
@@ -223,7 +228,7 @@ snapshot_consumed_pending: std.atomic.Value(bool) = .init(false),
 
 /// Swap chains selected during the current render pass. Each entry is retained while render_mu is
 /// released so the same set can be presented safely even if its window changes concurrently.
-present_swap_chains: std.ArrayList(*gpu.SwapChain) = .empty,
+present_swap_chains: std.ArrayList(PendingPresent) = .empty,
 
 // Internal module state
 allocator: std.mem.Allocator,
@@ -372,7 +377,7 @@ pub fn initWindow(core: *Core, window_id: mach.ObjectID) !void {
 pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
     std.debug.assert(core.present_swap_chains.items.len == 0);
     errdefer {
-        for (core.present_swap_chains.items) |swap_chain| swap_chain.release();
+        for (core.present_swap_chains.items) |present| present.swap_chain.release();
         core.present_swap_chains.clearRetainingCapacity();
     }
 
@@ -397,7 +402,10 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             const on_render = core_window.on_render orelse continue;
             if (!Platform.shouldRenderWindow(core, window_id)) continue;
 
-            try core.present_swap_chains.append(core.allocator, core_window.swap_chain);
+            try core.present_swap_chains.append(core.allocator, .{
+                .window_id = window_id,
+                .swap_chain = core_window.swap_chain,
+            });
             core_window.swap_chain.reference();
             shared_device = core_window.device;
 
@@ -429,9 +437,9 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
 
     // Present only the selected swap chains outside render_mu so the app thread can prepare the
     // next frame during GPU submission.
-    for (core.present_swap_chains.items) |swap_chain| {
-        swap_chain.present();
-        swap_chain.release();
+    for (core.present_swap_chains.items) |present| {
+        Platform.presentSwapChain(core, present.window_id, present.swap_chain, io);
+        present.swap_chain.release();
     }
     core.present_swap_chains.clearRetainingCapacity();
 
