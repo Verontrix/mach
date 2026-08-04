@@ -554,7 +554,7 @@ const NativeState = struct {
     /// recreate the swap chain before the next frame.
     pending_swap_chain_update: ?PendingSwapChainUpdate = null,
 
-    /// Latest world snapshot rendered by this window. Accessed only by the render thread.
+    /// Latest world snapshot rendered by this window. Protected by core.windows.lock.
     rendered_snapshot_generation: u64 = 0,
 
     /// Forces the latest snapshot to be rendered again after creating or reconfiguring a window.
@@ -1162,6 +1162,11 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
             if (core_window.on_render != null) try initWindow(core, core_mod, window_id, io);
             continue;
         };
+
+        const snapshot_generation = core.snapshot_generation.load(.acquire);
+        if (n.live_resize.load(.acquire) and snapshot_generation != 0 and n.rendered_snapshot_generation != snapshot_generation) {
+            objc.objc.msgSend(n.surface.layer, "setNeedsDisplay", void, .{});
+        }
 
         // Update window decoration color.
         const native_window: *objc.app_kit.Window = n.window;
