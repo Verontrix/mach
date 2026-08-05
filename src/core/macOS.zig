@@ -180,6 +180,25 @@ const MACHView = objc.objc.DefineClass(struct {
         return @ptrCast(@alignCast(implementation._state.get(v).?));
     }
 
+    fn configureDisplayLink(
+        v: *Self,
+        link: *objc.quartz_core.MetalDisplayLink,
+        preferred_frame_latency: f32,
+    ) void {
+        link.setPreferredFrameLatency(preferred_frame_latency);
+
+        const window = objc.app_kit.View.window(@ptrCast(v)) orelse return;
+        const screen = window.screen() orelse return;
+        const maximum_fps = screen.maximumFramesPerSecond();
+        if (maximum_fps <= 0) return;
+
+        const fps: f32 = @floatFromInt(maximum_fps);
+        // Equal minimum and maximum values request the screen's fixed maximum cadence. Core
+        // Animation treats this as a best-effort preference, particularly on variable-rate
+        // displays.
+        link.setPreferredFrameRateRange(.{ .minimum = fps, .maximum = fps, .preferred = fps });
+    }
+
     /// Pushes a `mouse_motion` event with `event`'s window-relative position, OR a
     /// `mouse_motion_relative` event with raw NSEvent deltas if the window currently has
     /// mouse capture. Shared by all the mouse{Moved,Dragged,rightMouseDragged,otherMouseDragged}
@@ -482,8 +501,12 @@ const MACHView = objc.objc.DefineClass(struct {
     pub const direct_methods = struct {
         /// Start driving rendering off a CAMetalDisplayLink, so `metalDisplayLink:needsUpdate:`
         /// fires on every vsync.
-        pub fn startDisplayLink(self: *Self) callconv(.c) bool {
-            if (implementation._displayLink.get(self) != null) return true;
+        pub fn startDisplayLink(self: *Self, preferred_frame_latency: f32) callconv(.c) bool {
+            if (implementation._displayLink.get(self)) |link_ptr| {
+                const link: *objc.quartz_core.MetalDisplayLink = @ptrCast(link_ptr);
+                configureDisplayLink(self, link, preferred_frame_latency);
+                return true;
+            }
 
             const base_layer = objc.app_kit.View.layer(@ptrCast(self));
             if (!objc.objc.isKindOf(base_layer, objc.quartz_core.MetalLayer)) return false;
@@ -496,6 +519,7 @@ const MACHView = objc.objc.DefineClass(struct {
             const slot = implementation._displayLink.slot(self) orelse return false;
             slot.* = link;
 
+            configureDisplayLink(self, link, preferred_frame_latency);
             link.setDelegate(@ptrCast(self));
             link.addToRunLoop_forMode(objc.foundation.RunLoop.mainRunLoop(), objc.app_kit.NSRunLoopCommonModes);
             return true;
@@ -711,7 +735,7 @@ fn endLiveResize(n: *NativeState) void {
     const vsync_mode = n.core.windows.get(n.window_id, .vsync_mode);
     n.core.windows.unlockShared();
     const has_display_link = @atomicLoad(bool, &n.surface.use_display_link, .acquire);
-    if (!vsync_mode.isNone() and !has_display_link) RenderLoop.attachDisplayLink(n, vsync_mode.preferredImageCount());
+    if (!vsync_mode.isNone() and !has_display_link) RenderLoop.attachDisplayLink(n, vsync_mode);
 
     global_render_wake.set(n.io);
 }
@@ -846,10 +870,20 @@ const RenderLoop = struct {
         self.thread = std.Thread.spawn(.{}, renderThreadFn, .{self}) catch return error.ThreadSpawnFailed;
     }
 
+    fn preferredDisplayLinkFrameLatency(vsync_mode: VSyncMode) f32 {
+        return switch (vsync_mode) {
+            .double, .low_latency, .adaptive => 1.0,
+            // Triple buffering comes from the three-drawable swap chain. Requesting two frames
+            // of display-link latency reduces direct-to-display cadence on ProMotion displays.
+            .triple => 1.0,
+            .none_low_latency, .none_max_throughput => unreachable,
+        };
+    }
+
     /// Starts the CAMetalDisplayLink for a window. Called during window creation and when
     /// configuring a vsync mode at runtime.
-    fn attachDisplayLink(n: *NativeState, preferred_image_count: u32) void {
-        n.surface.layer.setMaximumDrawableCount(std.math.clamp(preferred_image_count, 2, 3));
+    fn attachDisplayLink(n: *NativeState, vsync_mode: VSyncMode) void {
+        n.surface.layer.setMaximumDrawableCount(vsync_mode.preferredImageCount());
 
         // Tell SwapChain.getCurrentTextureView (on the render thread) to consume display link
         // drawables instead of calling nextDrawable. This MUST be set before startDisplayLink,
@@ -862,7 +896,8 @@ const RenderLoop = struct {
         n.surface.layer.setDisplaySyncEnabled(true);
 
         // Start the display link.
-        if (!n.view.call(.startDisplayLink, .{})) {
+        const frame_latency = preferredDisplayLinkFrameLatency(vsync_mode);
+        if (!n.view.call(.startDisplayLink, .{frame_latency})) {
             log.err("CAMetalDisplayLink unavailable (requires macOS 14+)", .{});
             @atomicStore(bool, &n.surface.use_display_link, false, .release);
             return;
@@ -1269,7 +1304,7 @@ pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
                 const have_display_link = @atomicLoad(bool, &n.surface.use_display_link, .acquire);
                 if (have_display_link) RenderLoop.detachDisplayLink(n);
                 if (want_vsync) {
-                    RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
+                    RenderLoop.attachDisplayLink(n, core_window.vsync_mode);
                 }
             }
 
@@ -1478,7 +1513,7 @@ fn initWindow(
     // CAMetalDisplayLink so vsync pacing begins immediately.
     core_window = core.windows.getValue(window_id);
     n.surface = @ptrCast(@alignCast(core_window.surface));
-    if (!core_window.vsync_mode.isNone()) RenderLoop.attachDisplayLink(n, core_window.vsync_mode.preferredImageCount());
+    if (!core_window.vsync_mode.isNone()) RenderLoop.attachDisplayLink(n, core_window.vsync_mode);
 
     // Show the window only after the surface and display link are ready, so the user never sees
     // the window without rendered content on it.
