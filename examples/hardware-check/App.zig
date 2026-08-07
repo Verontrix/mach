@@ -28,8 +28,8 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
     .deinit,
     .deinit2,
@@ -194,7 +194,7 @@ fn setupWindow(app: *App, core: *mach.Core, sprite: *gfx.Sprite, text: *gfx.Text
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ mach.Audio, .cleanup },
     .{ gfx.Sprite, .cleanup },
     .{ gfx.Text, .cleanup },
@@ -204,7 +204,7 @@ pub const tick = mach.schedule(.{
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(
+pub fn tickApp(
     core: *mach.Core,
     app: *App,
     app_mod: mach.Mod(App),

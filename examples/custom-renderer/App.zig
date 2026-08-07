@@ -24,8 +24,8 @@ pub const mach_systems = .{
     .init,
     .deinit,
     .deinitApp,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
 };
 
@@ -85,13 +85,13 @@ pub fn init(
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ mach.Core, .snapshotStart },
     .{ Renderer, .snapshot },
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(
+pub fn tickApp(
     core: *mach.Core,
     renderer: *Renderer,
     app: *App,

@@ -16,8 +16,8 @@ pub const mach_systems = .{
     .main,
     .init,
     .deinit,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
 };
 
@@ -57,12 +57,12 @@ pub fn init(
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ mach.Core, .snapshotStart },
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(core: *mach.Core) void {
+pub fn tickApp(core: *mach.Core) void {
     var iter = core.events(.default);
     while (iter.next()) |event| {
         switch (event) {

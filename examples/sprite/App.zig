@@ -27,8 +27,8 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
     .deinit,
 };
@@ -112,14 +112,14 @@ fn setupPipeline(
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ gfx.Sprite, .cleanup },
     .{ mach.Core, .snapshotStart },
     .{ gfx.Sprite, .snapshot },
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(
+pub fn tickApp(
     core: *mach.Core,
     app: *App,
     sprite: *gfx.Sprite,

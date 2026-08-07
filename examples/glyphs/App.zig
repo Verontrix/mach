@@ -46,8 +46,8 @@ pub const mach_systems = .{
     .main,
     .init,
     .deinit,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
 };
 
@@ -220,14 +220,14 @@ fn prepareGlyphs(queue: *gpu.Queue, app: *App) !void {
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ gfx.Sprite, .cleanup },
     .{ mach.Core, .snapshotStart },
     .{ gfx.Sprite, .snapshot },
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(
+pub fn tickApp(
     core: *mach.Core,
     app: *App,
     sprite: *gfx.Sprite,

@@ -30,8 +30,8 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
     .deinit,
     .deinitApp,
@@ -135,13 +135,13 @@ pub fn audioStateChange(audio: *mach.Audio, app: *App) !void {
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ mach.Audio, .cleanup },
     .{ mach.Core, .snapshotStart },
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(
+pub fn tickApp(
     core: *mach.Core,
     audio: *mach.Audio,
     app: *App,

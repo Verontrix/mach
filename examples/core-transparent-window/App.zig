@@ -15,8 +15,8 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .appTick,
     .tick,
+    .tickApp,
     .render,
     .deinit,
 };
@@ -95,12 +95,12 @@ fn setupPipeline(core: *mach.Core, app: *App) !void {
 }
 
 pub const tick = mach.schedule(.{
-    .{ App, .appTick },
+    .{ App, .tickApp },
     .{ mach.Core, .snapshotStart },
     .{ mach.Core, .snapshotEnd },
 });
 
-pub fn appTick(app: *App, core: *mach.Core) void {
+pub fn tickApp(app: *App, core: *mach.Core) void {
     const label = @tagName(mach_module) ++ ".tick";
     _ = label;
     var iter = core.events(.default);
