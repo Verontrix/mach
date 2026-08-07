@@ -49,6 +49,7 @@ pub const mach_systems = .{
     .tickApp,
     .render,
     .deinit,
+    .deinitApp,
 };
 
 const RegionMap = std.AutoArrayHashMapUnmanaged(u21, mach.gfx.Atlas.Region);
@@ -383,11 +384,18 @@ pub fn render(
     }
 }
 
-pub fn deinit(app: *App) void {
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ gfx.Sprite, .deinit },
+});
+
+pub fn deinitApp(app: *App) void {
     app.app_thread.join();
-    app.texture_atlas.deinit(app.allocator);
-    app.texture.release();
-    _ = c.FT_Done_Face(app.face);
-    _ = c.FT_Done_FreeType(app.ft);
-    app.regions.deinit(app.allocator);
+    if (app.pipeline_id != null) {
+        app.texture_atlas.deinit(app.allocator);
+        app.texture.release();
+        _ = c.FT_Done_Face(app.face);
+        _ = c.FT_Done_FreeType(app.ft);
+        app.regions.deinit(app.allocator);
+    }
 }

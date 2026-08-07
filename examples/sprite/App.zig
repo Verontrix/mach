@@ -31,6 +31,7 @@ pub const mach_systems = .{
     .tickApp,
     .render,
     .deinit,
+    .deinitApp,
 };
 
 pub const main = mach.schedule(.{
@@ -312,7 +313,12 @@ fn rgb24ToRgba32(allocator: std.mem.Allocator, in: []zigimg.color.Rgb24) !zigimg
     return out;
 }
 
-pub fn deinit(
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ gfx.Sprite, .deinit },
+});
+
+pub fn deinitApp(
     app: *App,
     sprite: *gfx.Sprite,
 ) void {

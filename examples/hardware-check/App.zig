@@ -554,6 +554,8 @@ fn rgb24ToRgba32(allocator: std.mem.Allocator, in: []zigimg.color.Rgb24) !zigimg
 
 pub const deinit = mach.schedule(.{
     .{ App, .deinitApp },
+    .{ gfx.Sprite, .deinit },
+    .{ gfx.Text, .deinit },
     .{ mach.Audio, .deinit },
 });
 

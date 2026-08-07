@@ -32,6 +32,7 @@ pub const mach_systems = .{
     .tickApp,
     .render,
     .deinit,
+    .deinitApp,
 };
 
 pub const main = mach.schedule(.{
@@ -280,7 +281,12 @@ pub fn render(
     }
 }
 
-pub fn deinit(
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ gfx.Text, .deinit },
+});
+
+pub fn deinitApp(
     app: *App,
     text: *gfx.Text,
 ) void {
