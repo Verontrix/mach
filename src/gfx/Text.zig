@@ -16,9 +16,8 @@ pub const mach_systems = .{
     .cleanup,
     .snapshot,
     .render,
+    .deinit,
 };
-
-// TODO(text): currently not handling deinit properly
 
 const Uniforms = extern struct {
     /// The view * orthographic projection matrix
@@ -430,20 +429,22 @@ pub fn cleanup(text: *Text) void {
     // Now free the deleted text slots.
     var deleted = text.objects.sliceDeleted();
     while (deleted.next()) |text_id| {
-        if (text.objects.get(text_id, .managed)) |managed| {
-            for (managed.bufs.items) |*buf| {
-                buf.deinit(text.allocator);
-            }
-            var bufs = managed.bufs;
-            bufs.deinit(text.allocator);
-            var segments = managed.segments;
-            segments.deinit(text.allocator);
-        }
-        if (text.objects.get(text_id, .built)) |built| {
-            var glyphs = built.glyphs;
-            glyphs.deinit(text.allocator);
-        }
+        deinitObject(text, text_id);
         text.objects.free(text_id);
+    }
+}
+
+fn deinitObject(text: *Text, text_id: mach.ObjectID) void {
+    if (text.objects.get(text_id, .managed)) |managed| {
+        for (managed.bufs.items) |*buf| buf.deinit(text.allocator);
+        var bufs = managed.bufs;
+        bufs.deinit(text.allocator);
+        var segments = managed.segments;
+        segments.deinit(text.allocator);
+    }
+    if (text.objects.get(text_id, .built)) |built| {
+        var glyphs = built.glyphs;
+        glyphs.deinit(text.allocator);
     }
 }
 
@@ -1078,4 +1079,43 @@ fn renderPipeline(
     // TODO(text): can we remove unused dynamic offsets?
     render_pass.setBindGroup(0, built.bind_group, &.{});
     render_pass.draw(total_vertices, 1, 0, 0);
+}
+
+pub fn deinit(text: *Text) void {
+    const allocator = text.allocator;
+
+    var object_ids = text.objects.slice();
+    while (object_ids.next()) |text_id| deinitObject(text, text_id);
+    var deleted_objects = text.objects.sliceDeleted();
+    while (deleted_objects.next()) |text_id| deinitObject(text, text_id);
+
+    var pipeline_ids = text.pipelines.slice();
+    while (pipeline_ids.next()) |pipeline_id| {
+        var render_list = text.pipelines.get(pipeline_id, .render_list);
+        render_list.deinit(allocator);
+    }
+    var deleted_pipelines = text.pipelines.sliceDeleted();
+    while (deleted_pipelines.next()) |pipeline_id| {
+        var render_list = text.pipelines.get(pipeline_id, .render_list);
+        render_list.deinit(allocator);
+    }
+
+    if (text.render_segments) |segments_list| {
+        for (segments_list) |segments| {
+            for (segments) |segment| allocator.free(@constCast(segment.text));
+            allocator.free(segments);
+        }
+        allocator.free(segments_list);
+    }
+    for (text.built_pipelines.items) |*built| {
+        if (built.*) |*pipeline| pipeline.deinit(allocator);
+    }
+    for (text.cached_render_lists.items) |*render_list| {
+        render_list.deinit(allocator);
+    }
+    text.built_pipelines.deinit(allocator);
+    text.cached_render_lists.deinit(allocator);
+    if (text.glyph_update_buffer) |*glyphs| glyphs.deinit(allocator);
+    if (text.font_once) |*font| font.deinit(allocator);
+    text.cp_transforms.deinit(allocator);
 }
