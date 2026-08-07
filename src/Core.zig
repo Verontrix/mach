@@ -467,7 +467,7 @@ pub fn renderFrame(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
 
 pub fn tick(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
     try Platform.tick(core, core_mod, io);
-    try core.handleExit(core_mod);
+    _ = try core.handleExit(core_mod);
 }
 
 /// Begin submitting a snapshot for rendering the next frame.
@@ -558,15 +558,17 @@ fn hashValue(hasher: anytype, value: anytype) void {
 
 fn platform_update_callback(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !bool {
     try Platform.tick(core, core_mod, io);
-    try core.handleExit(core_mod);
+    if (try core.handleExit(core_mod)) return false;
     return core.state.load(.acquire) != .exited;
 }
 
-fn handleExit(core: *Core, core_mod: mach.Mod(Core)) !void {
+fn handleExit(core: *Core, core_mod: mach.Mod(Core)) !bool {
     if (core.state.load(.acquire) == .exiting) {
         if (core.on_exit) |on_exit| core_mod.callId(on_exit);
         core_mod.call(.deinit);
+        return true;
     }
+    return false;
 }
 
 /// Signal that the application should exit. Thread-safe.
