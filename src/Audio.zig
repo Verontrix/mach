@@ -214,27 +214,6 @@ pub fn allocSamples(audio: *Audio, len: usize) ![]align(alignment) f32 {
     return audio.allocator.alignedAlloc(f32, .fromByteUnits(alignment), len);
 }
 
-/// Cleans up audio buffers that have been marked for deletion via `delete()`.
-/// Frees the sample memory and releases the buffer object.
-pub fn cleanup(audio: *Audio) void {
-    audio.buffers.lock();
-    defer audio.buffers.unlock();
-
-    var deleted = audio.buffers.sliceDeleted();
-    while (deleted.next()) |buf_id| {
-        const samples = audio.buffers.get(buf_id, .samples);
-        audio.buffers.free(buf_id);
-        audio.allocator.free(samples);
-    }
-}
-
-pub fn deinit(audio: *Audio) void {
-    audio.shutdown.store(true, .release);
-    audio.player.deinit();
-    audio.ctx.deinit();
-    if (audio.mixing_buffer) |*b| b.deinit(audio.allocator);
-}
-
 /// Audio.tick is called on the high-priority OS audio thread when the audio driver is waiting for
 /// more audio samples because the audio.output buffer does not currently have enough to satisfy the
 /// driver.
@@ -476,6 +455,27 @@ inline fn mixSamples(
     }
 
     return current_index;
+}
+
+/// Cleans up audio buffers that have been marked for deletion via `delete()`.
+/// Frees the sample memory and releases the buffer object.
+pub fn cleanup(audio: *Audio) void {
+    audio.buffers.lock();
+    defer audio.buffers.unlock();
+
+    var deleted = audio.buffers.sliceDeleted();
+    while (deleted.next()) |buf_id| {
+        const samples = audio.buffers.get(buf_id, .samples);
+        audio.buffers.free(buf_id);
+        audio.allocator.free(samples);
+    }
+}
+
+pub fn deinit(audio: *Audio) void {
+    audio.shutdown.store(true, .release);
+    audio.player.deinit();
+    audio.ctx.deinit();
+    if (audio.mixing_buffer) |*b| b.deinit(audio.allocator);
 }
 
 test "mixSamples - basic mono to mono mixing" {

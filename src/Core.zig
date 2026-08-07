@@ -249,6 +249,24 @@ pub const State = enum(u8) {
     exited,
 };
 
+/// Core.main enters the platform's main loop, which drives rendering on the main thread.
+///
+/// The app is responsible for running its own tick logic, either:
+/// * In `on_render` for single-threaded apps, or
+/// * On a separate app thread via `mach.AppThread`.
+pub fn main(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
+    if (core.on_exit == null) @panic("core.on_exit callback must be set");
+
+    try Platform.tick(core, core_mod, io);
+
+    // Platform drives the main loop (render thread).
+    Platform.run(platform_update_callback, .{ core, core_mod, io });
+
+    // Platform.run is marked noreturn on some platforms, but not all, so this is here for the
+    // platforms that do return
+    std.process.exit(0);
+}
+
 pub fn init(core: *Core, allocator: std.mem.Allocator, io: std.Io) !void {
     // TODO(leak): fix all leaks
     try mach.sysgpu.Impl.init(allocator, .{});
@@ -530,24 +548,6 @@ fn hashValue(hasher: anytype, value: anytype) void {
         },
         else => std.hash.autoHash(hasher, value),
     }
-}
-
-/// Core.main enters the platform's main loop, which drives rendering on the main thread.
-///
-/// The app is responsible for running its own tick logic, either:
-/// * In `on_render` for single-threaded apps, or
-/// * On a separate app thread via `mach.AppThread`.
-pub fn main(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !void {
-    if (core.on_exit == null) @panic("core.on_exit callback must be set");
-
-    try Platform.tick(core, core_mod, io);
-
-    // Platform drives the main loop (render thread).
-    Platform.run(platform_update_callback, .{ core, core_mod, io });
-
-    // Platform.run is marked noreturn on some platforms, but not all, so this is here for the
-    // platforms that do return
-    std.process.exit(0);
 }
 
 fn platform_update_callback(core: *Core, core_mod: mach.Mod(Core), io: std.Io) !bool {
