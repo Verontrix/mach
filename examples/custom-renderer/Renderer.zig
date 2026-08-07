@@ -122,10 +122,7 @@ pub fn init(renderer: *Renderer) !void {
 
 /// Called on the app thread (inside render_mu) to snapshot objects for the render thread.
 pub fn snapshot(renderer: *Renderer, core: *mach.Core) !void {
-    try renderer.render_objects.copyFrom(&renderer.objects);
-    // Point render-side graph to the snapshotted render_graph so render-side
-    // parent/child queries use the snapshot rather than the live app graph.
-    renderer.render_objects.internal.graph = &core.render_graph;
+    try mach.Core.snapshotObjects(core, &renderer.render_objects, &renderer.objects);
 }
 
 pub fn renderFrame(

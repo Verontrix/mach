@@ -272,8 +272,8 @@ pub fn snapshot(sprite: *Sprite, core: *mach.Core) !void {
     }
 
     // Snapshot the sprite objects and pipelines.
-    try sprite.render_objects.copyFrom(&sprite.objects);
-    try sprite.render_pipelines.copyFrom(&sprite.pipelines);
+    try mach.Core.snapshotObjects(core, &sprite.render_objects, &sprite.objects);
+    try mach.Core.snapshotObjects(core, &sprite.render_pipelines, &sprite.pipelines);
 
     // Deep-copy each pipeline's .render_list. copyFrom shallow-aliased the field to the app-side
     // backing memory; re-attach our owned cached_render_lists entry (with its retained capacity)
@@ -287,11 +287,6 @@ pub fn snapshot(sprite: *Sprite, core: *mach.Core) !void {
         sprite.cached_render_lists.items[built_idx] = dst;
         sprite.render_pipelines.setRaw(render_pipeline_id, .render_list, dst);
     }
-
-    // Point render-side graphs to the snapshotted render_graph so user-driven graph queries on
-    // the render side observe the snapshot rather than the live app graph.
-    sprite.render_objects.internal.graph = &core.render_graph;
-    sprite.render_pipelines.internal.graph = &core.render_graph;
 
     // Clear all dirty flags on app-side after copyFrom. The flags have already been copied to the
     // render side, so render() will see them. Clearing here ensures they don't re-propagate next frame.

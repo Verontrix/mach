@@ -494,8 +494,8 @@ pub fn snapshot(text: *Text, core: *mach.Core) !void {
     }
 
     // Snapshot the text objects and pipelines.
-    try text.render_objects.copyFrom(&text.objects);
-    try text.render_pipelines.copyFrom(&text.pipelines);
+    try mach.Core.snapshotObjects(core, &text.render_objects, &text.objects);
+    try mach.Core.snapshotObjects(core, &text.render_pipelines, &text.pipelines);
 
     // Deep-copy each pipeline's .render_list. copyFrom shallow-aliased the field to the app-side
     // backing memory; re-attach our owned cached_render_lists entry (with its retained capacity)
@@ -554,11 +554,6 @@ pub fn snapshot(text: *Text, core: *mach.Core) !void {
         }
         text.render_segments = entries;
     }
-
-    // Point render-side graphs to the snapshotted render_graph so render-side
-    // getChildren queries use the snapshot rather than the live app graph.
-    text.render_objects.internal.graph = &core.render_graph;
-    text.render_pipelines.internal.graph = &core.render_graph;
 
     // Clear all dirty flags on app-side after copyFrom. The flags have already been copied to the
     // render side, so render() will see them. Clearing here ensures they don't re-propagate next frame.

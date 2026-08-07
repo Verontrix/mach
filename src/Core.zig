@@ -490,6 +490,12 @@ pub fn snapshotStart(core: *Core, io: std.Io) !void {
     try core.render_graph.copyFrom(core.windows.internal.graph, core.allocator);
 }
 
+/// Copies app-side objects into a render-side snapshot using the current render graph.
+pub fn snapshotObjects(core: *Core, dst: anytype, src: anytype) !void {
+    try dst.copyFrom(src);
+    dst.internal.graph = &core.render_graph;
+}
+
 /// End submission of a snapshot for rendering the next frame.
 pub fn snapshotEnd(core: *Core, io: std.Io) void {
     _ = core.snapshot_generation.fetchAdd(1, .release);
