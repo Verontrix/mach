@@ -45,10 +45,10 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .deinit,
     .tick,
     .tickApp,
     .render,
+    .deinit,
 };
 
 const RegionMap = std.AutoArrayHashMapUnmanaged(u21, mach.gfx.Atlas.Region);
@@ -102,15 +102,6 @@ pub fn init(
         .spawn_timer = mach.time.Timer.start(io),
         .rand = std.Random.DefaultPrng.init(1337),
     };
-}
-
-pub fn deinit(app: *App) void {
-    app.app_thread.join();
-    app.texture_atlas.deinit(app.allocator);
-    app.texture.release();
-    _ = c.FT_Done_Face(app.face);
-    _ = c.FT_Done_FreeType(app.ft);
-    app.regions.deinit(app.allocator);
 }
 
 fn setupPipeline(
@@ -390,4 +381,13 @@ pub fn render(
             .{ core.windows.get(app.window, .frame).rate, core.input.rate, app.sprites },
         );
     }
+}
+
+pub fn deinit(app: *App) void {
+    app.app_thread.join();
+    app.texture_atlas.deinit(app.allocator);
+    app.texture.release();
+    _ = c.FT_Done_Face(app.face);
+    _ = c.FT_Done_FreeType(app.ft);
+    app.regions.deinit(app.allocator);
 }

@@ -9,9 +9,9 @@ pub const mach_module = .renderer;
 
 pub const mach_systems = .{
     .init,
-    .deinit,
     .snapshot,
     .renderFrame,
+    .deinit,
 };
 
 const Renderer = @This();
@@ -117,16 +117,6 @@ pub fn init(renderer: *Renderer) !void {
     };
 }
 
-pub fn deinit(
-    renderer: *Renderer,
-) !void {
-    if (renderer.pipeline) |p| {
-        p.release();
-        for (renderer.bind_groups) |bind_group| bind_group.release();
-    }
-    if (renderer.uniform_buffer) |b| b.release();
-}
-
 /// Called on the app thread (inside render_mu) to snapshot objects for the render thread.
 pub fn snapshot(renderer: *Renderer, core: *mach.Core) !void {
     try renderer.render_objects.copyFrom(&renderer.objects);
@@ -196,4 +186,14 @@ pub fn renderFrame(
     var command = encoder.finish(&.{ .label = label });
     defer command.release();
     window.queue.submit(&[_]*gpu.CommandBuffer{command});
+}
+
+pub fn deinit(
+    renderer: *Renderer,
+) !void {
+    if (renderer.pipeline) |p| {
+        p.release();
+        for (renderer.bind_groups) |bind_group| bind_group.release();
+    }
+    if (renderer.uniform_buffer) |b| b.release();
 }

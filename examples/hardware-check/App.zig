@@ -28,12 +28,12 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
+    .audioStateChange,
     .tick,
     .tickApp,
     .render,
     .deinit,
-    .deinit2,
-    .audioStateChange,
+    .deinitApp,
 };
 
 pub const mach_tags = .{.window_meta};
@@ -45,11 +45,6 @@ pub const main = mach.schedule(.{
     .{ gfx.Sprite, .init },
     .{ App, .init },
     .{ mach.Core, .main },
-});
-
-pub const deinit = mach.schedule(.{
-    .{ mach.Audio, .deinit },
-    .{ App, .deinit2 },
 });
 
 app_thread: mach.Thread,
@@ -114,12 +109,6 @@ pub fn init(
     // Tag the main window with its metadata
     const main_window_meta = try app.window_meta.new(.{ .window_id = window, .window_num = 1 });
     try core.windows.setTag(window, App, .window_meta, main_window_meta);
-}
-
-pub fn deinit2(
-    app: *App,
-) void {
-    app.app_thread.join();
 }
 
 /// Called on the high-priority audio OS thread when the audio driver needs more audio samples, so
@@ -561,4 +550,13 @@ fn rgb24ToRgba32(allocator: std.mem.Allocator, in: []zigimg.color.Rgb24) !zigimg
         out.rgba32[i] = zigimg.color.Rgba32{ .r = in[i].r, .g = in[i].g, .b = in[i].b, .a = 255 };
     }
     return out;
+}
+
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ mach.Audio, .deinit },
+});
+
+pub fn deinitApp(app: *App) void {
+    app.app_thread.join();
 }

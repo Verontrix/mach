@@ -30,12 +30,12 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
+    .audioStateChange,
     .tick,
     .tickApp,
     .render,
     .deinit,
     .deinitApp,
-    .audioStateChange,
 };
 
 pub const main = mach.schedule(.{
@@ -44,15 +44,6 @@ pub const main = mach.schedule(.{
     .{ App, .init },
     .{ mach.Core, .main },
 });
-
-pub const deinit = mach.schedule(.{
-    .{ App, .deinitApp },
-    .{ mach.Audio, .deinit },
-});
-
-pub fn deinitApp(app: *App) void {
-    app.app_thread.join();
-}
 
 /// Tag object we set as a child of mach.Audio objects to indicate they are background music.
 // TODO(object): consider adding a better object 'tagging' system?
@@ -315,4 +306,13 @@ fn keyToFrequency(key: mach.Core.KeyButtonID) f32 {
         .slash => 329.63, // E5
         else => 0.0,
     };
+}
+
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ mach.Audio, .deinit },
+});
+
+pub fn deinitApp(app: *App) void {
+    app.app_thread.join();
 }

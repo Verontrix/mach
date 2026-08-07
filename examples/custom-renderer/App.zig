@@ -22,11 +22,11 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .deinit,
-    .deinitApp,
     .tick,
     .tickApp,
     .render,
+    .deinit,
+    .deinitApp,
 };
 
 // Global state for our app module.
@@ -44,15 +44,6 @@ pub const main = mach.schedule(.{
     .{ App, .init },
     .{ mach.Core, .main },
 });
-
-pub const deinit = mach.schedule(.{
-    .{ App, .deinitApp },
-    .{ Renderer, .deinit },
-});
-
-pub fn deinitApp(app: *App) void {
-    app.app_thread.join();
-}
 
 pub fn init(
     core: *mach.Core,
@@ -219,4 +210,13 @@ pub fn render(
     renderer_mod: mach.Mod(Renderer),
 ) !void {
     renderer_mod.call(.renderFrame);
+}
+
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ Renderer, .deinit },
+});
+
+pub fn deinitApp(app: *App) void {
+    app.app_thread.join();
 }

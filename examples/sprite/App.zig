@@ -269,15 +269,6 @@ pub fn render(
     }
 }
 
-pub fn deinit(
-    app: *App,
-    sprite: *gfx.Sprite,
-) void {
-    app.app_thread.join();
-    // Cleanup here, if desired.
-    if (app.pipeline_id != null) sprite.objects.delete(app.player_id);
-}
-
 // TODO(sprite): don't require users to copy / write this helper themselves
 fn loadTexture(device: *gpu.Device, queue: *gpu.Queue, allocator: std.mem.Allocator) !*gpu.Texture {
     // Load the image from memory
@@ -319,4 +310,12 @@ fn rgb24ToRgba32(allocator: std.mem.Allocator, in: []zigimg.color.Rgb24) !zigimg
         out.rgba32[i] = zigimg.color.Rgba32{ .r = in[i].r, .g = in[i].g, .b = in[i].b, .a = 255 };
     }
     return out;
+}
+
+pub fn deinit(
+    app: *App,
+    sprite: *gfx.Sprite,
+) void {
+    app.app_thread.join();
+    if (app.pipeline_id != null) sprite.objects.delete(app.player_id);
 }

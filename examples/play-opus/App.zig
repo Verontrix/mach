@@ -30,12 +30,12 @@ pub const mach_tags = .{
 pub const mach_systems = .{
     .main,
     .init,
+    .audioStateChange,
     .tick,
     .tickApp,
     .render,
     .deinit,
     .deinitApp,
-    .audioStateChange,
 };
 
 pub const main = mach.schedule(.{
@@ -43,11 +43,6 @@ pub const main = mach.schedule(.{
     .{ mach.Audio, .init },
     .{ App, .init },
     .{ mach.Core, .main },
-});
-
-pub const deinit = mach.schedule(.{
-    .{ App, .deinitApp },
-    .{ mach.Audio, .deinit },
 });
 
 app_thread: mach.Thread,
@@ -108,11 +103,6 @@ pub fn init(
     std.debug.print("[typing]     Play SFX\n", .{});
     std.debug.print("[arrow up]   increase volume 10%\n", .{});
     std.debug.print("[arrow down] decrease volume 10%\n", .{});
-}
-
-pub fn deinitApp(app: *App, allocator: std.mem.Allocator) void {
-    app.app_thread.join();
-    allocator.free(app.sfx.samples);
 }
 
 /// Called on the high-priority audio OS thread when the audio driver needs more audio samples, so
@@ -233,4 +223,14 @@ pub fn render(
     var command = encoder.finish(&.{ .label = label });
     defer command.release();
     window.queue.submit(&[_]*gpu.CommandBuffer{command});
+}
+
+pub const deinit = mach.schedule(.{
+    .{ App, .deinitApp },
+    .{ mach.Audio, .deinit },
+});
+
+pub fn deinitApp(app: *App, allocator: std.mem.Allocator) void {
+    app.app_thread.join();
+    allocator.free(app.sfx.samples);
 }

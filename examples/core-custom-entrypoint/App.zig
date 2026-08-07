@@ -15,10 +15,10 @@ pub const mach_module = .app;
 pub const mach_systems = .{
     .main,
     .init,
-    .deinit,
     .tick,
     .tickApp,
     .render,
+    .deinit,
 };
 
 pipeline: ?*gpu.RenderPipeline = null,
@@ -30,11 +30,6 @@ pub const main = mach.schedule(.{
     .{ App, .init },
     .{ mach.Core, .main },
 });
-
-pub fn deinit(app: *App) void {
-    app.app_thread.join();
-    if (app.pipeline) |p| p.release();
-}
 
 pub fn init(
     app: *App,
@@ -159,4 +154,9 @@ pub fn render(core: *mach.Core, app: *App) !void {
             core.windows.get(app.window, .frame).rate, core.input.rate,
         });
     }
+}
+
+pub fn deinit(app: *App) void {
+    app.app_thread.join();
+    if (app.pipeline) |p| p.release();
 }
