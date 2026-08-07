@@ -32,7 +32,7 @@ const Objects = mach.Objects(.{}, struct {
 });
 
 pipeline: ?*gpu.RenderPipeline = null,
-bind_groups: [num_bind_groups]*gpu.BindGroup = undefined,
+bind_groups: std.ArrayList(*gpu.BindGroup) = .empty,
 uniform_buffer: ?*gpu.Buffer = null,
 
 objects: Objects,
@@ -43,7 +43,11 @@ render_objects: Objects,
 fn setupPipeline(
     core: *mach.Core,
     renderer: *Renderer,
+    allocator: std.mem.Allocator,
 ) !void {
+    var bind_groups: std.ArrayList(*gpu.BindGroup) = .empty;
+    try bind_groups.ensureTotalCapacity(allocator, num_bind_groups);
+
     const window = core.windows.getValue(core.window);
     const device = window.device;
     const shader_module = device.createShaderModuleWGSL("shader.wgsl", @embedFile("shader.wgsl"));
@@ -79,15 +83,14 @@ fn setupPipeline(
     );
     defer bind_group_layout.release();
 
-    var bind_groups: [num_bind_groups]*gpu.BindGroup = undefined;
-    for (bind_groups, 0..) |_, i| {
-        bind_groups[i] = device.createBindGroup(
+    for (0..num_bind_groups) |i| {
+        bind_groups.appendAssumeCapacity(device.createBindGroup(
             &gpu.BindGroup.Descriptor.init(.{
                 .label = label,
                 .layout = bind_group_layout,
                 .entries = &.{gpu.BindGroup.Entry.initBuffer(0, uniform_buffer, uniform_offset * i, @sizeOf(UniformBufferObject), @sizeOf(UniformBufferObject))},
             }),
-        );
+        ));
     }
 
     const bind_group_layouts = [_]*gpu.BindGroupLayout{bind_group_layout};
@@ -128,9 +131,10 @@ pub fn snapshot(renderer: *Renderer, core: *mach.Core) !void {
 pub fn renderFrame(
     core: *mach.Core,
     renderer: *Renderer,
+    allocator: std.mem.Allocator,
 ) !void {
     const pipeline = renderer.pipeline orelse {
-        try setupPipeline(core, renderer);
+        try setupPipeline(core, renderer, allocator);
         return;
     };
     const window = core.windows.getValue(core.window);
@@ -173,7 +177,7 @@ pub fn renderFrame(
     defer render_pass.release();
 
     // Draw
-    for (renderer.bind_groups[0..num_objects]) |bind_group| {
+    for (renderer.bind_groups.items[0..num_objects]) |bind_group| {
         render_pass.setPipeline(pipeline);
         render_pass.setBindGroup(0, bind_group, &.{0});
         render_pass.draw(3, 1, 0, 0);
@@ -190,10 +194,10 @@ pub fn renderFrame(
 
 pub fn deinit(
     renderer: *Renderer,
-) !void {
-    if (renderer.pipeline) |p| {
-        p.release();
-        for (renderer.bind_groups) |bind_group| bind_group.release();
-    }
+    allocator: std.mem.Allocator,
+) void {
+    if (renderer.pipeline) |p| p.release();
+    for (renderer.bind_groups.items) |bind_group| bind_group.release();
+    renderer.bind_groups.deinit(allocator);
     if (renderer.uniform_buffer) |b| b.release();
 }
