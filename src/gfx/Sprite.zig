@@ -17,9 +17,8 @@ pub const mach_systems = .{
     .cleanup,
     .snapshot,
     .render,
+    .deinit,
 };
-
-// TODO(sprite): currently not handling deinit properly
 
 const Uniforms = extern struct {
     /// The view * orthographic projection matrix
@@ -696,4 +695,31 @@ fn renderPipeline(
     // TODO(sprite): can we remove unused dynamic offsets?
     render_pass.setBindGroup(0, built.bind_group, &.{});
     render_pass.draw(total_vertices, 1, 0, 0);
+}
+
+pub fn deinit(sprite: *Sprite) void {
+    const allocator = sprite.allocator;
+
+    var pipeline_ids = sprite.pipelines.slice();
+    while (pipeline_ids.next()) |pipeline_id| {
+        var render_list = sprite.pipelines.get(pipeline_id, .render_list);
+        render_list.deinit(allocator);
+    }
+    var deleted_pipelines = sprite.pipelines.sliceDeleted();
+    while (deleted_pipelines.next()) |pipeline_id| {
+        var render_list = sprite.pipelines.get(pipeline_id, .render_list);
+        render_list.deinit(allocator);
+    }
+
+    for (sprite.built_pipelines.items) |*built| {
+        if (built.*) |*pipeline| pipeline.deinit();
+    }
+    for (sprite.cached_render_lists.items) |*render_list| {
+        render_list.deinit(allocator);
+    }
+    sprite.built_pipelines.deinit(allocator);
+    sprite.cached_render_lists.deinit(allocator);
+    sprite.cp_transforms.deinit(allocator);
+    sprite.cp_uv_transforms.deinit(allocator);
+    sprite.cp_sizes.deinit(allocator);
 }
