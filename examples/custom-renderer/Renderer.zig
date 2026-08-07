@@ -7,7 +7,12 @@ const Vec3 = math.Vec3;
 
 pub const mach_module = .renderer;
 
-pub const mach_systems = .{ .init, .deinit, .snapshot, .renderFrame };
+pub const mach_systems = .{
+    .init,
+    .deinit,
+    .snapshot,
+    .renderFrame,
+};
 
 const Renderer = @This();
 

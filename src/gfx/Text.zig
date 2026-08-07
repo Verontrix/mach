@@ -11,7 +11,12 @@ const Text = @This();
 
 pub const mach_module = .mach_gfx_text;
 
-pub const mach_systems = .{ .init, .cleanup, .snapshot, .render };
+pub const mach_systems = .{
+    .init,
+    .cleanup,
+    .snapshot,
+    .render,
+};
 
 // TODO(text): currently not handling deinit properly
 

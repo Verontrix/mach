@@ -12,7 +12,12 @@ const Sprite = @This();
 
 pub const mach_module = .mach_gfx_sprite;
 
-pub const mach_systems = .{ .init, .cleanup, .snapshot, .render };
+pub const mach_systems = .{
+    .init,
+    .cleanup,
+    .snapshot,
+    .render,
+};
 
 // TODO(sprite): currently not handling deinit properly
 

@@ -10,7 +10,12 @@ const Audio = @This();
 
 pub const mach_module = .mach_audio;
 
-pub const mach_systems = .{ .init, .tick, .cleanup, .deinit };
+pub const mach_systems = .{
+    .init,
+    .tick,
+    .cleanup,
+    .deinit,
+};
 
 /// The length of a @Vector(len, f32) used for SIMD mixing of audio buffers. Audio buffers must be
 /// aligned to simd_vector_length * @sizeOf(f32).
