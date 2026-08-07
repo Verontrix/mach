@@ -27,6 +27,10 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // Force LLVM/LLD on Linux, until we update our Zig version > 2026.4.10-mach
+    exe.use_llvm = true;
+    exe.use_lld = true;
+
     // Run the app when `zig build run` is invoked
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
