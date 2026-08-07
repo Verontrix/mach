@@ -64,10 +64,8 @@ fn validateSchedule(comptime entries: anytype) bool {
 
         // Validate first field is a valid module type
         if (!isValid(Module)) {
-            @compileError("mach.schedule() entry first field must be a valid Mach module (has `pub const mach_module = .foo_name`), found: " ++ @typeName(Module));
-        }
-        if (!@hasDecl(Module, "mach_systems")) {
-            @compileError("mach.schedule() entry first field must have a `pub const mach_systems` declaration, found: " ++ @typeName(Module));
+            @compileError("mach.schedule() entry first field must be a valid Mach module, " ++
+                "found: " ++ @typeName(Module));
         }
 
         // Validate second field is an enum literal
@@ -1226,14 +1224,37 @@ pub fn Modules(module_lists: anytype) type {
 }
 
 /// Validates that the given struct is a Mach module.
-fn validate(comptime module: anytype) void {
-    if (!@hasDecl(module, "mach_module")) @compileError("mach: invalid module, missing `pub const mach_module = .foo_name;` declaration: " ++ @typeName(@TypeOf(module)));
-    if (@typeInfo(@TypeOf(module.mach_module)) != .enum_literal) @compileError("mach: invalid module, expected `pub const mach_module = .foo_name;` declaration, found: " ++ @typeName(@TypeOf(module.mach_module)));
+fn validate(comptime M: type) void {
+    if (!@hasDecl(M, "mach_module")) {
+        @compileError("mach: invalid module, missing `pub const mach_module = .foo;`: " ++
+            @typeName(M));
+    }
+    if (@typeInfo(@TypeOf(M.mach_module)) != .enum_literal) {
+        @compileError("mach: invalid module, `mach_module` must be an enum literal, found: " ++
+            @typeName(@TypeOf(M.mach_module)));
+    }
+    if (!@hasDecl(M, "mach_systems")) {
+        @compileError("mach: invalid module, missing `pub const mach_systems = .{ ... };`: " ++
+            @typeName(M));
+    }
+    const systems_info = @typeInfo(@TypeOf(M.mach_systems));
+    if (systems_info != .@"struct" or !systems_info.@"struct".is_tuple) {
+        @compileError("mach: invalid module, `mach_systems` must be a tuple, found: " ++
+            @typeName(@TypeOf(M.mach_systems)));
+    }
+    inline for (M.mach_systems) |system| {
+        if (@typeInfo(@TypeOf(system)) != .enum_literal) {
+            @compileError("mach: invalid module, `mach_systems` entries must be enum literals");
+        }
+    }
 }
 
-fn isValid(comptime module: anytype) bool {
-    if (!@hasDecl(module, "mach_module")) return false;
-    if (@typeInfo(@TypeOf(module.mach_module)) != .enum_literal) return false;
+fn isValid(comptime M: type) bool {
+    if (!@hasDecl(M, "mach_module")) return false;
+    if (@typeInfo(@TypeOf(M.mach_module)) != .enum_literal) return false;
+    if (!@hasDecl(M, "mach_systems")) return false;
+    const systems_info = @typeInfo(@TypeOf(M.mach_systems));
+    if (systems_info != .@"struct" or !systems_info.@"struct".is_tuple) return false;
     return true;
 }
 
