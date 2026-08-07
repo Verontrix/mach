@@ -22,11 +22,6 @@ pub const Modules = mach.Modules(.{
 
 pub const mach_module = .app;
 
-pub const mach_tags = .{
-    // A tag we'll attach to mach.Audio buffers to indicate they are background music
-    .bgm,
-};
-
 pub const mach_systems = .{
     .main,
     .init,
@@ -36,6 +31,11 @@ pub const mach_systems = .{
     .render,
     .deinit,
     .deinitApp,
+};
+
+pub const mach_tags = .{
+    // A tag we'll attach to mach.Audio buffers to indicate they are background music
+    .bgm,
 };
 
 pub const main = mach.schedule(.{
