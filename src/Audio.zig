@@ -178,13 +178,15 @@ pub fn init(
     allocator: std.mem.Allocator,
     io: std.Io,
 ) !void {
-    const ctx = try initAudioContext(allocator);
+    var ctx = try initAudioContext(allocator);
+    errdefer ctx.deinit();
     try ctx.refresh();
 
     // TODO(audio): let people handle these errors
     // TODO(audio): enable selecting non-default devices
     const device = ctx.defaultDevice(.playback) orelse return error.NoDeviceFound;
     var player = try ctx.createPlayer(device, writeFn, .{ .user_data = audio, .sample_rate = 48000 });
+    errdefer player.deinit();
     log.info("opened audio device: channels={} sample_rate={} format={s}", .{ player.channels().len, player.sampleRate(), @tagName(player.format()) });
 
     // TODO(env): upgrade to https://codeberg.org/ziglang/zig/pulls/30644 by properly passing
@@ -476,6 +478,7 @@ pub fn deinit(audio: *Audio) void {
     audio.player.deinit();
     audio.ctx.deinit();
     if (audio.mixing_buffer) |*b| b.deinit(audio.allocator);
+    if (audio.output.buf.len > 0) audio.allocator.free(audio.output.buf);
 }
 
 test "mixSamples - basic mono to mono mixing" {
