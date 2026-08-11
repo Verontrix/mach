@@ -7,7 +7,7 @@ pub fn main() !void {
     const io = io_threaded.io();
 
     // The set of Mach modules our application may use.
-    var mods: @import("app").Modules = undefined;
+    var mods: @import("app").Modules = .{};
     try mods.init(allocator, io);
     // TODO: enable mods.deinit(allocator); for allocator leak detection
     // defer mods.deinit(allocator);

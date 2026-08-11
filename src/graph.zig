@@ -214,8 +214,11 @@ pub const Graph = struct {
 
         for (0..preallocate.num_result_lists) |_| {
             var list = try allocator.create(std.ArrayList(u64));
-            errdefer allocator.destroy(list);
             list.* = .empty;
+            errdefer {
+                list.deinit(allocator);
+                allocator.destroy(list);
+            }
             try list.ensureTotalCapacity(allocator, preallocate.result_list_size);
             try graph.result_lists.available.append(allocator, list);
         }
@@ -235,6 +238,7 @@ pub const Graph = struct {
         graph.id_to_node.map.deinit(allocator);
         graph.nodes.deinit(allocator);
         graph.queue.deinit(allocator);
+        graph.pending_delete_pools.deinit(allocator);
     }
 
     /// Get an existing Node for the given ID, or null if not found

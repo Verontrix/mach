@@ -225,6 +225,16 @@ pub fn Objects(options: ObjectsOptions, comptime T: type) type {
             }
         };
 
+        fn deinit(objs: *@This(), allocator: std.mem.Allocator) void {
+            objs.internal.data.deinit(allocator);
+            objs.internal.freed.deinit(allocator);
+            objs.internal.pending_delete.deinit(allocator);
+            objs.internal.generation.deinit(allocator);
+            objs.internal.recycling_bin.deinit(allocator);
+            if (objs.internal.updated) |*updated_fields| updated_fields.deinit(allocator);
+            objs.internal.tags.deinit(allocator);
+        }
+
         /// Tries to acquire the mutex without blocking the caller's thread.
         /// Returns `false` if the calling thread would have to block to acquire it.
         /// Otherwise, returns `true` and the caller should `unlock()` the Mutex to release it.
@@ -1022,9 +1032,9 @@ pub fn Modules(module_lists: anytype) type {
         // branches.
         const module_types_by_name = ModuleTypesByName(modules){};
 
-        mods: ModulesByName(modules),
-        io: std.Io,
-        allocator: std.mem.Allocator,
+        mods: ModulesByName(modules) = undefined,
+        io: std.Io = undefined,
+        allocator: std.mem.Allocator = undefined,
 
         module_names: StringTable = .{},
         object_names: StringTable = .{},
@@ -1032,18 +1042,32 @@ pub fn Modules(module_lists: anytype) type {
             module_name_id: u32,
             object_name_id: u32,
         }) = .{},
-        graph: Graph,
+        graph: Graph = undefined,
 
-        pub fn init(m: *@This(), allocator: std.mem.Allocator, io: std.Io) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
-            m.* = .{
-                .mods = undefined,
-                .graph = undefined,
-                .io = io,
-                .allocator = allocator,
-            };
+        /// True once `init` has run once.
+        initialized: bool = false,
+
+        pub fn init(
+            m: *@This(),
+            allocator: std.mem.Allocator,
+            io: std.Io,
+        ) (std.mem.Allocator.Error || std.Thread.SpawnError || error{
+            AlreadyInitialized,
+        })!void {
+            if (m.initialized) return error.AlreadyInitialized;
+            m.io = io;
+            m.allocator = allocator;
+            m.module_names = .{};
+            m.object_names = .{};
+            m.name_ids = .{};
             try initGraph(&m.graph, allocator, io, .global);
+            errdefer {
+                m.graph.deinit(allocator);
+                m.name_ids.deinit(allocator);
+                m.object_names.deinit(allocator);
+                m.module_names.deinit(allocator);
+            }
 
-            // TODO(object): errdefer release allocations made in this loop
             inline for (@typeInfo(@TypeOf(m.mods)).@"struct".fields) |field| {
                 // TODO(objects): module-state-init
                 const Mod2 = @TypeOf(@field(m.mods, field.name));
@@ -1080,12 +1104,31 @@ pub fn Modules(module_lists: anytype) type {
                     }
                 }
             }
+
+            m.initialized = true;
+        }
+
+        fn deinitObjectPools(m: *@This(), allocator: std.mem.Allocator) void {
+            inline for (@typeInfo(@TypeOf(m.mods)).@"struct".fields) |field| {
+                const M = @TypeOf(@field(m.mods, field.name));
+                inline for (@typeInfo(M).@"struct".fields) |mod_field| {
+                    if (@typeInfo(mod_field.type) == .@"struct" and
+                        @hasDecl(mod_field.type, "IsMachObjects"))
+                    {
+                        @field(@field(m.mods, field.name), mod_field.name).deinit(allocator);
+                    }
+                }
+            }
         }
 
         pub fn deinit(m: *@This(), allocator: std.mem.Allocator) void {
+            if (!m.initialized) return;
             m.graph.deinit(allocator);
+            m.deinitObjectPools(allocator);
             m.name_ids.deinit(allocator);
-            // TODO: remainder of deinit
+            m.object_names.deinit(allocator);
+            m.module_names.deinit(allocator);
+            m.initialized = false;
         }
 
         pub fn Module(module_tag_or_type: anytype) type {
@@ -1359,15 +1402,12 @@ test "Long field name" {
         another_field: Objects(.{}, struct {}),
     };
 
-    //TODO: swap to testing allocator once remainder of deinit implemented
-    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = aa.allocator();
+    const allocator = std.testing.allocator;
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{test_module}) = undefined;
+    var modules: Modules(.{test_module}) = .{};
     try modules.init(allocator, io);
     modules.deinit(allocator);
-    aa.deinit();
 }
 
 test "Many fields, same module" {
@@ -1386,15 +1426,12 @@ test "Many fields, same module" {
         field9: Objects(.{}, struct {}),
     };
 
-    //TODO: swap to testing allocator once remainder of deinit implemented
-    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = aa.allocator();
+    const allocator = std.testing.allocator;
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{test_module}) = undefined;
+    var modules: Modules(.{test_module}) = .{};
     try modules.init(allocator, io);
     modules.deinit(allocator);
-    aa.deinit();
 }
 
 test "Many fields, Many modules" {
@@ -1421,15 +1458,53 @@ test "Many fields, Many modules" {
         field9: Objects(.{}, struct {}),
     };
 
-    //TODO: swap to testing allocator once remainder of deinit implemented
-    var aa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = aa.allocator();
+    const allocator = std.testing.allocator;
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{ test_module0, test_module1, test_module2 }) = undefined;
+    var modules: Modules(.{ test_module0, test_module1, test_module2 }) = .{};
     try modules.init(allocator, io);
     modules.deinit(allocator);
-    aa.deinit();
+}
+
+test "Modules.init cleans up allocation failures" {
+    const TestModule = struct {
+        pub const mach_module = .test_module;
+        pub const mach_systems = .{};
+        first: Objects(.{}, struct {}),
+        second: Objects(.{}, struct {}),
+    };
+    const testInit = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var modules: Modules(.{TestModule}) = .{};
+            try modules.init(allocator, std.Options.debug_io);
+            modules.deinit(allocator);
+        }
+    }.run;
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testInit, .{});
+}
+
+test "Modules lifecycle" {
+    const TestModule = struct {
+        pub const mach_module = .test_module;
+        pub const mach_systems = .{};
+        objects: Objects(.{}, struct {}),
+    };
+
+    const allocator = std.testing.allocator;
+    var modules: Modules(.{TestModule}) = .{};
+
+    try modules.init(allocator, std.Options.debug_io);
+    try std.testing.expectError(
+        error.AlreadyInitialized,
+        modules.init(allocator, std.Options.debug_io),
+    );
+
+    modules.deinit(allocator);
+    modules.deinit(allocator);
+
+    try modules.init(allocator, std.Options.debug_io);
+    modules.deinit(allocator);
 }
 
 test "Mod.call" {
@@ -1456,7 +1531,7 @@ test "Mod.call" {
     defer aa.deinit();
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{test_module}) = undefined;
+    var modules: Modules(.{test_module}) = .{};
     try modules.init(allocator, io);
     defer modules.deinit(allocator);
 
@@ -1489,7 +1564,7 @@ test "Mod.callId" {
     defer aa.deinit();
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{test_module}) = undefined;
+    var modules: Modules(.{test_module}) = .{};
     try modules.init(allocator, io);
     defer modules.deinit(allocator);
 
@@ -1547,7 +1622,7 @@ test "Mod.async / asyncId / concurrent" {
     defer aa.deinit();
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{test_module}) = undefined;
+    var modules: Modules(.{test_module}) = .{};
     try modules.init(allocator, io);
     defer modules.deinit(allocator);
 
@@ -1592,7 +1667,7 @@ test "Mod.asyncGroup / asyncGroupId / concurrentGroup" {
     defer aa.deinit();
 
     const io = std.Options.debug_io;
-    var modules: Modules(.{test_module}) = undefined;
+    var modules: Modules(.{test_module}) = .{};
     try modules.init(allocator, io);
     defer modules.deinit(allocator);
 

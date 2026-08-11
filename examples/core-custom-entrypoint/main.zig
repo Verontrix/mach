@@ -11,7 +11,7 @@ pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
     // The set of Mach modules our application may use.
-    var mods: Modules = undefined;
+    var mods: Modules = .{};
     try mods.init(allocator);
 
     const app = mods.get(.app);
