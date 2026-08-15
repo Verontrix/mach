@@ -116,23 +116,34 @@ pub fn fetchMachDependency(
     var child = std.process.spawn(io, .{ .argv = &fetch_argv }) catch |err| {
         try stderr.print(
             "mach {s}: failed to spawn `zig fetch`: {t}\n" ++
-                "Make sure `zig` is in your PATH and re-run:\n" ++
+                "Make sure `zig` is in your PATH and run this command from the generated " ++
+                "project directory:\n" ++
                 "  $ zig fetch --save=mach {s}\n",
             .{ command_name, err, mach_url },
         );
+        try stderr.flush();
         std.process.exit(1);
     };
     const term = try child.wait(io);
     switch (term) {
         .exited => |code| if (code != 0) {
             try stderr.print(
-                "mach {s}: `zig fetch` exited with code {d}\n",
-                .{ command_name, code },
+                "mach {s}: `zig fetch` exited with code {d}\n" ++
+                    "Run this command from the generated project directory to finish setup:\n" ++
+                    "  $ zig fetch --save=mach {s}\n",
+                .{ command_name, code, mach_url },
             );
+            try stderr.flush();
             std.process.exit(1);
         },
         else => {
-            try stderr.print("mach {s}: `zig fetch` terminated abnormally\n", .{command_name});
+            try stderr.print(
+                "mach {s}: `zig fetch` terminated abnormally\n" ++
+                    "Run this command from the generated project directory to finish setup:\n" ++
+                    "  $ zig fetch --save=mach {s}\n",
+                .{ command_name, mach_url },
+            );
+            try stderr.flush();
             std.process.exit(1);
         },
     }
