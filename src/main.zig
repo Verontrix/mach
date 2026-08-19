@@ -35,6 +35,12 @@ pub const initGraph = module.initGraph;
 pub const schedule = module.schedule;
 pub const startThread = module.startThread;
 
+/// All Mach modules
+pub const modules =
+    (if (build_options.want_core) .{Core} else .{}) ++
+    (if (build_options.want_sysaudio) .{Audio} else .{}) ++
+    (if (build_options.want_mach) gfx.modules else .{});
+
 // Instrumented function to load system libraries and print nicer error
 // messages. Accepts a tuple of library names to try in order (e.g.,
 // versioned soname first, then unversioned fallback).
