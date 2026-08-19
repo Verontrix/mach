@@ -4,8 +4,6 @@ const gpu = mach.gpu;
 
 const App = @This();
 
-const log = std.log.scoped(.triangles);
-
 /// The scene is a big rotating ring of `outer_count` small circles, each small circle made of
 /// `mid_count` triangles, and each triangle spins on its own. Bump these to increase GPU load.
 const outer_count = 12;
@@ -50,8 +48,6 @@ window: mach.ObjectID,
 
 /// Seconds since start; used to compute a per-frame delta for animation.
 timer: mach.time.Timer,
-/// Cadence timer for periodic FPS logging to the console.
-log_timer: mach.time.Timer,
 
 /// Animation speed multiplier (1x, 2x, 3x, ...), controlled with the up/down arrow keys.
 speed_mult: u32 = 1,
@@ -82,7 +78,6 @@ pub fn init(
         .app_thread = try mach.startThread(core, app_mod.id.tick, core_mod, .app),
         .window = window,
         .timer = mach.time.Timer.start(io),
-        .log_timer = mach.time.Timer.start(io),
     };
 }
 
@@ -157,7 +152,7 @@ pub fn tickApp(core: *mach.Core, app: *App) void {
         switch (event) {
             .key_press => |ev| switch (ev.key) {
                 .v => {
-                    // V key: cycle to the next vsync mode and print it to the console.
+                    // V key: cycle to the next vsync mode.
                     const vsync = core.windows.get(ev.window_id, .vsync_mode);
                     const new_vsync: mach.Core.VSyncMode = switch (vsync) {
                         .double => .triple,
@@ -168,17 +163,14 @@ pub fn tickApp(core: *mach.Core, app: *App) void {
                         .none_max_throughput => .double,
                     };
                     core.windows.set(ev.window_id, .vsync_mode, new_vsync);
-                    log.info("vsync mode -> {s}", .{@tagName(new_vsync)});
                 },
                 .up => {
                     // Up arrow: increase animation speed (capped at 64x).
                     if (app.speed_mult < 64) app.speed_mult += 1;
-                    log.info("speed -> {d}x", .{app.speed_mult});
                 },
                 .down => {
                     // Down arrow: decrease animation speed (minimum 1x).
                     if (app.speed_mult > 1) app.speed_mult -= 1;
-                    log.info("speed -> {d}x", .{app.speed_mult});
                 },
                 .t => {
                     // T key: toggle how animation time is derived.
@@ -186,10 +178,6 @@ pub fn tickApp(core: *mach.Core, app: *App) void {
                         .frame_delta => .absolute,
                         .absolute => .frame_delta,
                     };
-                    log.info("animation time: {s}", .{switch (app.time_mode) {
-                        .frame_delta => "frame delta",
-                        .absolute => "absolute",
-                    }});
                 },
                 else => {},
             },
@@ -258,13 +246,21 @@ pub fn render(app: *App, core: *mach.Core) !void {
     defer command.release();
     window.queue.submit(&[_]*gpu.CommandBuffer{command});
 
-    // Print FPS / input rate / vsync mode to the console about once per second.
-    if (app.log_timer.read() >= 1.0) {
-        _ = app.log_timer.lap();
-        const vsync = core.windows.get(app.window, .vsync_mode);
-        log.info("[ {d}fps ] [ input {d}hz ] [ triangles: {d} ] [ vsync: {s} ]", .{
-            window.frame.rate, core.input.rate, triangle_count, @tagName(vsync),
-        });
+    {
+        core.windows.lock();
+        defer core.windows.unlock();
+        try core.fmtTitle(
+            app.window,
+            "core-triangles [ {d}fps ] [ Input {d}hz ] [ Triangles: {d} ] " ++
+                "[ Speed: {d}x ] [ VSync: {s} ]",
+            .{
+                core.windows.get(app.window, .frame).rate,
+                core.input.rate,
+                @as(u32, triangle_count),
+                app.speed_mult,
+                @tagName(core.windows.get(app.window, .vsync_mode)),
+            },
+        );
     }
 }
 
