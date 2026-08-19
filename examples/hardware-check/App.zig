@@ -159,7 +159,6 @@ fn setupWindow(app: *App, core: *mach.Core, sprite: *gfx.Sprite, text: *gfx.Text
     // Setup sprite pipeline
     const sprite_pipeline = try sprite.pipelines.new(.{
         .window = window_id,
-        .render_pass = undefined,
         .texture = app.sprite_texture,
     });
     app.window_meta.set(window_meta_id, .sprite_pipeline_id, sprite_pipeline);
@@ -167,7 +166,6 @@ fn setupWindow(app: *App, core: *mach.Core, sprite: *gfx.Sprite, text: *gfx.Text
     // Setup text pipeline
     const text_pipeline = try text.pipelines.new(.{
         .window = window_id,
-        .render_pass = undefined,
     });
     app.window_meta.set(window_meta_id, .text_pipeline_id, text_pipeline);
 

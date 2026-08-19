@@ -96,7 +96,6 @@ fn setupPipeline(
     // Create a sprite rendering pipeline
     app.pipeline_id = try sprite.pipelines.new(.{
         .window = core.window,
-        .render_pass = undefined,
         .texture = try loadTexture(window.device, window.queue, app.allocator),
     });
 

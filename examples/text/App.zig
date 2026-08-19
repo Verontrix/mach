@@ -97,7 +97,6 @@ fn setupPipeline(
     // Create a text rendering pipeline
     app.pipeline_id = try text.pipelines.new(.{
         .window = core.window,
-        .render_pass = undefined,
     });
 
     // Create a text style
