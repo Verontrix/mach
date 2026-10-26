@@ -52,7 +52,7 @@ pub const mach_systems = .{
     .deinitApp,
 };
 
-const RegionMap = std.AutoArrayHashMapUnmanaged(u21, mach.gfx.Atlas.Region);
+const RegionMap = std.array_hash_map.Auto(u21, mach.gfx.Atlas.Region);
 
 app_thread: mach.Thread,
 allocator: std.mem.Allocator,

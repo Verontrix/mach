@@ -12,7 +12,7 @@ const Section = std.ArrayList(u8);
 air: *const Air,
 allocator: std.mem.Allocator,
 arena: std.heap.ArenaAllocator,
-emitted_decls: std.AutoArrayHashMapUnmanaged(InstIndex, []const u8) = .{},
+emitted_decls: std.array_hash_map.Auto(InstIndex, []const u8) = .{},
 scratch: std.ArrayList(u8) = .empty,
 output: std.ArrayList(u8) = .empty,
 indent: u32 = 0,

@@ -3329,7 +3329,7 @@ pub const CommandEncoder = struct {
 
 pub const StateTracker = struct {
     device: *Device = undefined,
-    written_set: std.AutoArrayHashMapUnmanaged(*Resource, c.D3D12_RESOURCE_STATES) = .{},
+    written_set: std.array_hash_map.Auto(*Resource, c.D3D12_RESOURCE_STATES) = .{},
     barriers: std.ArrayList(c.D3D12_RESOURCE_BARRIER) = .empty,
 
     pub fn init(tracker: *StateTracker, device: *Device) void {

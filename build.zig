@@ -160,6 +160,10 @@ pub fn build(b: *std.Build) !void {
                 .file = b.path("src/sysaudio/pipewire/sysaudio.c"),
                 .flags = &.{"-std=gnu99"},
             });
+            // Fixes a problem when translating bits/fcntl2 caused by ARO replacing
+            // clang as the C translator. This disables the compile checks that
+            // ARO breaks.
+            module.addCMacro("_FORTIFY_SOURCE", "0");
         }
         if (target.result.cpu.arch != .wasm32) {
             for (&sysaudio_tests) |*sysaudio_test| {
@@ -851,8 +855,8 @@ const SysAudioTest = struct {
 };
 
 comptime {
-    const supported_zig = std.SemanticVersion.parse("0.16.0-dev.3142+5ccfeb926") catch unreachable;
+    const supported_zig = std.SemanticVersion.parse("0.16.0") catch unreachable;
     if (builtin.zig_version.order(supported_zig) != .eq) {
-        @compileError(std.fmt.comptimePrint("unsupported Zig version ({}). Required Zig version 2026.4.10-mach: https://machengine.org/docs/zig-version/", .{builtin.zig_version}));
+        @compileError(std.fmt.comptimePrint("unsupported Zig version ({}). Required Zig version 0.16", .{builtin.zig_version}));
     }
 }

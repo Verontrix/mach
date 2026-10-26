@@ -40,7 +40,7 @@ pub fn init(alloc: std.mem.Allocator, options: InitOptions) !void {
     }
 }
 
-pub fn libVulkanBaseLoader(_: vk.Instance, name_ptr: [*:0]const u8) vk.PfnVoidFunction {
+pub fn libVulkanBaseLoader(_: ?vk.Instance, name_ptr: [*:0]const u8) vk.PfnVoidFunction {
     const name = std.mem.span(name_ptr);
     return libvulkan.?.lookup(vk.PfnVoidFunction, name) orelse null;
 }
@@ -344,7 +344,7 @@ pub const Adapter = struct {
         _ = vki.getPhysicalDeviceQueueFamilyProperties(device, &count, queue_families.ptr);
 
         for (queue_families, 0..) |family, i| {
-            if (family.queue_flags.graphics_bit and family.queue_flags.compute_bit) {
+            if (family.queue_flags.graphics and family.queue_flags.compute) {
                 return @intCast(i);
             }
         }
@@ -394,7 +394,7 @@ pub const Surface = struct {
     old_vk_swapchain: vk.SwapchainKHR = .null_handle,
     /// Device that owns old_vk_swapchain, needed to destroy it if no further
     /// swapchain is created before the surface is destroyed.
-    old_vk_swapchain_device: vk.Device = .null_handle,
+    old_vk_swapchain_device: ?vk.Device = undefined,
 
     pub fn init(instance: *Instance, desc: *const sysgpu.Surface.Descriptor) !*Surface {
         const vk_instance = instance.vk_instance;
@@ -454,7 +454,9 @@ pub const Surface = struct {
         // A swapchain stashed for old_swapchain handoff must be destroyed before the surface;
         // destroying a VkSurfaceKHR with a live swapchain is invalid and leaks the swapchain.
         if (surface.old_vk_swapchain != .null_handle) {
-            vkd.destroySwapchainKHR(surface.old_vk_swapchain_device, surface.old_vk_swapchain, null);
+            const device = surface.old_vk_swapchain_device orelse unreachable;
+
+            vkd.destroySwapchainKHR(device, surface.old_vk_swapchain, null);
         }
         vki.destroySurfaceKHR(vk_instance, surface.vk_surface, null);
         allocator.destroy(surface);
@@ -560,14 +562,14 @@ pub const Device = struct {
         var supported_ds_formats = std.AutoHashMapUnmanaged(vk.Format, void){};
         for ([_]vk.Format{ .d24_unorm_s8_uint, .s8_uint }) |format| {
             const properties = vki.getPhysicalDeviceFormatProperties(adapter.physical_device, format);
-            if (properties.optimal_tiling_features.depth_stencil_attachment_bit) {
+            if (properties.optimal_tiling_features.depth_stencil_attachment) {
                 try supported_ds_formats.put(allocator, format, {});
             }
         }
 
         const cmd_pool = try vkd.createCommandPool(vk_device, &.{
             .queue_family_index = adapter.queue_family,
-            .flags = .{ .reset_command_buffer_bit = true },
+            .flags = .{ .reset_command_buffer = true },
         }, null);
 
         const memory_allocator = MemoryAllocator.init(adapter.physical_device);
@@ -889,7 +891,7 @@ pub const SubmitObject = struct {
     pub fn init(device: *Device) !SubmitObject {
         const vk_device = device.vk_device;
 
-        const fence = try vkd.createFence(vk_device, &.{ .flags = .{ .signaled_bit = false } }, null);
+        const fence = try vkd.createFence(vk_device, &.{ .flags = .{ .signaled = false } }, null);
 
         return .{
             .device = device,
@@ -983,7 +985,7 @@ pub const SwapChain = struct {
         // Consume old swapchain handle from surface for a safe Vulkan handoff.
         const old_vk_swapchain = surface.old_vk_swapchain;
         surface.old_vk_swapchain = .null_handle;
-        surface.old_vk_swapchain_device = .null_handle;
+        surface.old_vk_swapchain_device = undefined;
 
         const sc = try allocator.create(SwapChain);
 
@@ -997,10 +999,10 @@ pub const SwapChain = struct {
 
         const composite_alpha = blk: {
             const composite_alpha_flags = [_]vk.CompositeAlphaFlagsKHR{
-                .{ .opaque_bit_khr = true },
-                .{ .pre_multiplied_bit_khr = true },
-                .{ .post_multiplied_bit_khr = true },
-                .{ .inherit_bit_khr = true },
+                .{ .opaque_khr = true },
+                .{ .pre_multiplied_khr = true },
+                .{ .post_multiplied_khr = true },
+                .{ .inherit_khr = true },
             };
             for (composite_alpha_flags) |flag| {
                 if (@as(vk.Flags, @bitCast(flag)) & @as(vk.Flags, @bitCast(capabilities.supported_composite_alpha)) != 0) {
@@ -1043,7 +1045,7 @@ pub const SwapChain = struct {
             .image_array_layers = 1,
             .image_usage = image_usage,
             .image_sharing_mode = .exclusive,
-            .pre_transform = .{ .identity_bit_khr = true },
+            .pre_transform = .{ .identity_khr = true },
             .composite_alpha = composite_alpha,
             .present_mode = present_mode,
             .clipped = .false,
@@ -1055,7 +1057,7 @@ pub const SwapChain = struct {
             vkd.destroySwapchainKHR(vk_device, old_vk_swapchain, null);
         }
 
-        const fence = try vkd.createFence(vk_device, &.{ .flags = .{ .signaled_bit = false } }, null);
+        const fence = try vkd.createFence(vk_device, &.{ .flags = .{ .signaled = false } }, null);
         errdefer vkd.destroyFence(vk_device, fence, null);
 
         const wait_semaphore = try vkd.createSemaphore(vk_device, &.{}, null);
@@ -1632,15 +1634,15 @@ pub const BindGroupLayout = struct {
     manager: utils.Manager(BindGroupLayout) = .{},
     device: *Device,
     vk_layout: vk.DescriptorSetLayout,
-    desc_types: std.AutoArrayHashMapUnmanaged(vk.DescriptorType, u32),
+    desc_types: std.array_hash_map.Auto(vk.DescriptorType, u32),
     entries: std.ArrayList(Entry),
 
     pub fn init(device: *Device, desc: *const sysgpu.BindGroupLayout.Descriptor) !*BindGroupLayout {
         var bindings = try std.ArrayList(vk.DescriptorSetLayoutBinding).initCapacity(allocator, desc.entry_count);
         defer bindings.deinit(allocator);
 
-        var desc_types = std.AutoArrayHashMap(vk.DescriptorType, u32).init(allocator);
-        errdefer desc_types.deinit();
+        var desc_types: std.array_hash_map.Auto(vk.DescriptorType, u32) = .empty;
+        errdefer desc_types.deinit(allocator);
 
         var entries = try std.ArrayList(Entry).initCapacity(allocator, desc.entry_count);
         errdefer entries.deinit(allocator);
@@ -1651,7 +1653,7 @@ pub const BindGroupLayout = struct {
             if (desc_types.getPtr(descriptor_type)) |count| {
                 count.* += 1;
             } else {
-                try desc_types.put(descriptor_type, 1);
+                try desc_types.put(allocator, descriptor_type, 1);
             }
 
             bindings.appendAssumeCapacity(.{
@@ -1678,7 +1680,7 @@ pub const BindGroupLayout = struct {
         layout.* = .{
             .device = device,
             .vk_layout = vk_layout,
-            .desc_types = desc_types.unmanaged,
+            .desc_types = desc_types,
             .entries = entries,
         };
         return layout;
@@ -2026,7 +2028,7 @@ pub const ComputePipeline = struct {
 
         // PSO
         const stage = vk.PipelineShaderStageCreateInfo{
-            .stage = .{ .compute_bit = true },
+            .stage = .{ .compute = true },
             .module = compute_module.vk_shader_module,
             .p_name = desc.compute.entry_point,
         };
@@ -2076,7 +2078,7 @@ pub const RenderPipeline = struct {
 
         const vertex_module: *ShaderModule = @ptrCast(@alignCast(desc.vertex.module));
         stages.appendAssumeCapacity(.{
-            .stage = .{ .vertex_bit = true },
+            .stage = .{ .vertex = true },
             .module = vertex_module.vk_shader_module,
             .p_name = desc.vertex.entry_point,
             .p_specialization_info = null,
@@ -2085,7 +2087,7 @@ pub const RenderPipeline = struct {
         if (desc.fragment) |frag| {
             const frag_module: *ShaderModule = @ptrCast(@alignCast(frag.module));
             stages.appendAssumeCapacity(.{
-                .stage = .{ .fragment_bit = true },
+                .stage = .{ .fragment = true },
                 .module = frag_module.vk_shader_module,
                 .p_name = frag.entry_point,
                 .p_specialization_info = null,
@@ -2212,10 +2214,10 @@ pub const RenderPipeline = struct {
                     .dst_alpha_blend_factor = conv.vulkanBlendFactor(blend.alpha.dst_factor, false),
                     .alpha_blend_op = conv.vulkanBlendOp(blend.alpha.operation),
                     .color_write_mask = .{
-                        .r_bit = target.write_mask.red,
-                        .g_bit = target.write_mask.green,
-                        .b_bit = target.write_mask.blue,
-                        .a_bit = target.write_mask.alpha,
+                        .r = target.write_mask.red,
+                        .g = target.write_mask.green,
+                        .b = target.write_mask.blue,
+                        .a = target.write_mask.alpha,
                     },
                 };
                 rp_key.colors_buf[rp_key.colors_len] = .{
@@ -2386,7 +2388,7 @@ pub const CommandBuffer = struct {
             .level = .primary,
             .command_buffer_count = 1,
         }, @ptrCast(&vk_command_buffer));
-        try vkd.beginCommandBuffer(vk_command_buffer, &.{ .flags = .{ .one_time_submit_bit = true } });
+        try vkd.beginCommandBuffer(vk_command_buffer, &.{ .flags = .{ .one_time_submit = true } });
 
         const reference_tracker = try ReferenceTracker.init(device, vk_command_buffer);
         errdefer reference_tracker.deinit();
@@ -2596,7 +2598,7 @@ pub const CommandEncoder = struct {
         try encoder.reference_tracker.referenceBuffer(source);
         try encoder.reference_tracker.referenceBuffer(destination);
         try encoder.state_tracker.copyFromBuffer(source);
-        try encoder.state_tracker.writeToBuffer(destination, .{ .transfer_bit = true }, .{ .transfer_write_bit = true });
+        try encoder.state_tracker.writeToBuffer(destination, .{ .transfer = true }, .{ .transfer_write = true });
         encoder.state_tracker.flush(vk_command_buffer);
 
         const region = vk.BufferCopy{
@@ -2622,8 +2624,8 @@ pub const CommandEncoder = struct {
         try encoder.state_tracker.copyFromBuffer(source_buffer);
         try encoder.state_tracker.writeToTexture(
             destination_texture,
-            .{ .transfer_bit = true },
-            .{ .transfer_write_bit = true },
+            .{ .transfer = true },
+            .{ .transfer_write = true },
             .transfer_dst_optimal,
         );
         encoder.state_tracker.flush(vk_command_buffer);
@@ -2673,8 +2675,8 @@ pub const CommandEncoder = struct {
         try encoder.state_tracker.copyFromTexture(source_texture);
         try encoder.state_tracker.writeToTexture(
             destination_texture,
-            .{ .transfer_bit = true },
-            .{ .transfer_write_bit = true },
+            .{ .transfer = true },
+            .{ .transfer_write = true },
             .transfer_dst_optimal,
         );
         encoder.state_tracker.flush(vk_command_buffer);
@@ -2837,7 +2839,7 @@ pub const StateTracker = struct {
             tracker.dst_access_mask = tracker.dst_access_mask.merge(access_mask);
         } else if (tracker.copy_buffers.fetchRemove(buffer)) |_| {
             // WAR hazard
-            tracker.src_stage_mask = tracker.src_stage_mask.merge(.{ .transfer_bit = true });
+            tracker.src_stage_mask = tracker.src_stage_mask.merge(.{ .transfer = true });
             tracker.dst_stage_mask = tracker.dst_stage_mask.merge(stage_mask);
         } else {
             // WAR hazard
@@ -2866,7 +2868,7 @@ pub const StateTracker = struct {
             old_layout = write.value.image_layout;
         } else if (tracker.copy_textures.fetchRemove(texture)) |_| {
             // WAR hazard
-            tracker.src_stage_mask = tracker.src_stage_mask.merge(.{ .transfer_bit = true });
+            tracker.src_stage_mask = tracker.src_stage_mask.merge(.{ .transfer = true });
             tracker.dst_stage_mask = tracker.dst_stage_mask.merge(stage_mask);
 
             src_access_mask = .{};
@@ -2914,7 +2916,7 @@ pub const StateTracker = struct {
     }
 
     pub fn copyFromBuffer(tracker: *StateTracker, buffer: *Buffer) !void {
-        try tracker.readFromBufferEx(buffer, .{ .transfer_bit = true }, .{ .transfer_read_bit = true });
+        try tracker.readFromBufferEx(buffer, .{ .transfer = true }, .{ .transfer_read = true });
         try tracker.copy_buffers.put(allocator, buffer, {});
     }
 
@@ -2958,7 +2960,7 @@ pub const StateTracker = struct {
     }
 
     pub fn copyFromTexture(tracker: *StateTracker, texture: *Texture) !void {
-        try tracker.readFromTextureEx(texture, .{ .transfer_bit = true }, .{ .transfer_read_bit = true }, .transfer_src_optimal);
+        try tracker.readFromTextureEx(texture, .{ .transfer = true }, .{ .transfer_read = true }, .transfer_src_optimal);
         try tracker.copy_textures.put(allocator, texture, {});
     }
 
@@ -2990,7 +2992,7 @@ pub const StateTracker = struct {
         const src_stage_mask = if (tracker.src_stage_mask.toInt() != 0)
             tracker.src_stage_mask
         else
-            vk.PipelineStageFlags{ .top_of_pipe_bit = true };
+            vk.PipelineStageFlags{ .top_of_pipe = true };
 
         vkd.cmdPipelineBarrier(
             vk_command_buffer,
@@ -3148,8 +3150,8 @@ pub const ComputePassEncoder = struct {
         for (encoder.bind_groups[0..bind_group_count]) |group| {
             try encoder.state_tracker.accessBindGroup(
                 group,
-                .{ .compute_shader_bit = true },
-                .{ .shader_write_bit = true },
+                .{ .compute_shader = true },
+                .{ .shader_write = true },
                 .general,
             );
         }
@@ -3240,7 +3242,7 @@ pub const RenderPassEncoder = struct {
                 if (use_semaphore_wait) {
                     if (view.texture.swapchain) |sc| {
                         try cmd_encoder.command_buffer.wait_semaphores.append(allocator, sc.wait_semaphore);
-                        try cmd_encoder.command_buffer.wait_dst_stage_masks.append(allocator, .{ .all_commands_bit = true });
+                        try cmd_encoder.command_buffer.wait_dst_stage_masks.append(allocator, .{ .all_commands = true });
                     }
                 }
 
@@ -3351,7 +3353,7 @@ pub const RenderPassEncoder = struct {
         }});
 
         vkd.cmdSetScissor(vk_command_buffer, 0, &[_]vk.Rect2D{rect});
-        vkd.cmdSetStencilReference(vk_command_buffer, .{ .front_bit = true, .back_bit = true }, 0);
+        vkd.cmdSetStencilReference(vk_command_buffer, .{ .front = true, .back = true }, 0);
 
         // Result
         const rpe = try allocator.create(RenderPassEncoder);
@@ -3642,9 +3644,9 @@ const MemoryAllocator = struct {
             const flags = mem_type.property_flags;
             const heap_size = mem_heaps[mem_type.heap_index].size;
             const candidate = switch (mem_kind) {
-                .lazily_allocated => flags.lazily_allocated_bit,
+                .lazily_allocated => flags.lazily_allocated,
                 .linear_write_mappable => blk: {
-                    if (flags.host_visible_bit and flags.host_coherent_bit and !flags.device_coherent_bit_amd) {
+                    if (flags.host_visible and flags.host_coherent and !flags.device_coherent_amd) {
                         if (best_type) |best| {
                             const best_heap_size = mem_heaps[mem_types[best].heap_index].size;
                             if (heap_size > best_heap_size) {
@@ -3657,10 +3659,10 @@ const MemoryAllocator = struct {
                     break :blk false;
                 },
                 .linear_read_mappable => blk: {
-                    if (flags.host_visible_bit and flags.host_coherent_bit and !flags.device_coherent_bit_amd) {
+                    if (flags.host_visible and flags.host_coherent and !flags.device_coherent_amd) {
                         if (best_type) |best| {
-                            if (mem_types[best].property_flags.host_cached_bit) {
-                                if (flags.host_cached_bit) {
+                            if (mem_types[best].property_flags.host_cached) {
+                                if (flags.host_cached) {
                                     const best_heap_size = mem_heaps[mem_types[best].heap_index].size;
                                     if (heap_size > best_heap_size) {
                                         break :blk true;
@@ -3678,8 +3680,8 @@ const MemoryAllocator = struct {
                 },
                 .linear => blk: {
                     if (best_type) |best| {
-                        if (mem_types[best].property_flags.device_local_bit) {
-                            if (flags.device_local_bit and !flags.device_coherent_bit_amd) {
+                        if (mem_types[best].property_flags.device_local) {
+                            if (flags.device_local and !flags.device_coherent_amd) {
                                 const best_heap_size = mem_heaps[mem_types[best].heap_index].size;
                                 if (heap_size > best_heap_size) {
                                     break :blk true;

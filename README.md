@@ -19,6 +19,11 @@ See [machengine.org](https://machengine.org) for docs, tutorials, etc.
 
 Development occurs on [code.hexops.org](https://code.hexops.org/hexops/mach) - our GitHub [mirror](https://github.com/hexops/mach) is purely for visibility.
 
+### What the Fork?
+One of the challenges that when using Mach alongside other Zig packages is version compatibility. Many Zig libraries target Zig's official releases or master, while Mach has historically relied on its own nominated Zig versions. As a result, combining Mach with other libraries doesn't work, unless you spend a lot of time modifying those packages to be compatibile with the Mach nominated version. This is a bad decision and holds back many people from using Mach.
+
+This fork aims to address that issue by targeting official Zig releases rather than Mach-nominated Zig versions. The goal is to make Mach easier to use alongside the wider Zig ecosystem, simplify dependency management, and enable developers to build cross-platform applications and games using the Zig version they already use for their other projects.
+
 ## Join the community
 
 Join the [Mach community on Discord](https://discord.gg/XNG3NZgCqp) to discuss this project, ask questions, get help, etc.

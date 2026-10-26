@@ -16,7 +16,7 @@ const slot_buffer_lengths = 28;
 air: *const Air,
 allocator: std.mem.Allocator,
 storage: *std.ArrayList(u8),
-fn_emit_list: std.AutoArrayHashMapUnmanaged(InstIndex, bool) = .{},
+fn_emit_list: std.array_hash_map.Auto(InstIndex, bool) = .{},
 bindings: *const BindingTable,
 indent: u32 = 0,
 stage: Inst.Fn.Stage = .none,

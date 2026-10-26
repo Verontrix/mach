@@ -94,7 +94,7 @@ const CachedGlyph = struct {
     bearing_y: f32,
 };
 
-const RegionMap = std.AutoArrayHashMapUnmanaged(GlyphKey, CachedGlyph);
+const RegionMap = std.array_hash_map.Auto(GlyphKey, CachedGlyph);
 
 pub const Segment = struct {
     /// UTF-8 encoded string of text to render
